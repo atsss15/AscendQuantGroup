@@ -1,0 +1,32 @@
+{
+  "name": "ascendquantgroup",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Trading games and tools for Emory Ascend Quant Group",
+  "type": "module",
+  "scripts": {
+    "start": "node games/smash/server.js",
+    "smash": "node games/smash/server.js",
+    "dev": "node --watch games/smash/server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/atsss15/AscendQuantGroup.git"
+  },
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/atsss15/AscendQuantGroup/issues"
+  },
+  "homepage": "https://github.com/atsss15/AscendQuantGroup#readme",
+  "dependencies": {
+    "express": "^5.2.1",
+    "socket.io": "^4.8.4"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.4"
+  }
+}

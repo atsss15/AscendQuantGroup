@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Exchange</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="conn" id="conn" title="Disconnected"></span>
+      <span id="title">Exchange</span>
+    </div>
+    <div class="me" id="me-summary"></div>
+    <nav class="actions">
+      <button type="button" id="rules-btn" class="ghost">Rules</button>
+      <button type="button" id="admin-btn" class="ghost">Admin</button>
+    </nav>
+  </header>
+
+  <section id="rules" class="banner" hidden></section>
+  <section id="admin" class="admin" hidden>
+    <div id="admin-login"></div>
+    <div id="admin-panels"></div>
+  </section>
+
+  <div class="layout">
+    <main>
+      <div id="markets-empty" class="empty">No markets yet. Waiting for the admin to list some.</div>
+      <div id="groups"></div>
+    </main>
+    <aside class="side">
+      <section class="panel">
+        <h2>Positions</h2>
+        <div id="positions"></div>
+      </section>
+      <section class="panel">
+        <h2>Open orders <button type="button" id="cancel-all" class="link">Cancel all</button></h2>
+        <div id="orders"></div>
+      </section>
+      <section class="panel">
+        <h2>Leaderboard</h2>
+        <div id="leaderboard"></div>
+      </section>
+      <section class="panel">
+        <h2>Trades</h2>
+        <div id="tape"></div>
+      </section>
+    </aside>
+  </div>
+
+  <div id="join" class="modal" hidden>
+    <form id="join-form" class="modal-box">
+      <h1 id="join-title">Join</h1>
+      <p id="join-rules" class="muted"></p>
+      <input id="join-name" maxlength="24" placeholder="Your name" autocomplete="off" required>
+      <button type="submit" class="primary">Start trading</button>
+      <p id="join-error" class="error"></p>
+    </form>
+  </div>
+
+  <div id="toasts"></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
