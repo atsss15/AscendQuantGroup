@@ -83,7 +83,11 @@ input[type='number'] { font-variant-numeric: tabular-nums; }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 16px; }
 .conn { width: 8px; height: 8px; border-radius: 50%; background: var(--red); }
 .conn.on { background: var(--green); }
-.me { margin-left: auto; }
+#me-summary { margin-left: auto; display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; justify-content: flex-end; }
+#me-summary .stat { font-size: 12px; color: var(--muted); white-space: nowrap; }
+#me-summary .stat b { font-size: 14px; color: var(--text); font-variant-numeric: tabular-nums; }
+#me-summary .stat b.up { color: var(--green); }
+#me-summary .stat b.down { color: var(--red); }
 .actions { display: flex; gap: 8px; }
 
 .banner { padding: 10px 16px; background: var(--panel-2); border-bottom: 1px solid var(--border); color: var(--muted); }
@@ -101,6 +105,17 @@ form.inline input.price { width: 90px; }
 .match-list { display: grid; gap: 4px; margin-top: 8px; }
 .match-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 6px 8px; background: var(--panel); border-radius: 6px; }
 .match-row.done { opacity: 0.7; }
+.scroll-x { overflow-x: auto; }
+table.accounts { width: auto; margin-bottom: 8px; }
+table.accounts td, table.accounts th { padding-right: 14px; }
+table.accounts td { vertical-align: middle; }
+.set-cell { display: flex; gap: 4px; }
+.set-cell input { width: 90px; padding: 3px 6px; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--border); }
+.dot.on { background: var(--green); }
+.settle-up { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin: 6px 0; }
+.chip { background: var(--panel); border: 1px solid var(--border); border-radius: 999px; padding: 2px 4px 2px 10px; white-space: nowrap; }
+table.list tr.paid td { opacity: 0.5; }
 
 /* ---------- layout */
 
@@ -178,7 +193,7 @@ table.list tr.me td { background: rgba(88, 166, 255, 0.08); }
 .modal-box { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 24px; width: min(420px, 100%); display: grid; gap: 12px; }
 .modal-box h1 { margin: 0; font-size: 22px; }
 .modal-box p { margin: 0; }
-.modal-box input { padding: 10px; font-size: 16px; }
+.modal-box input, .modal-box select { width: 100%; padding: 10px; font-size: 16px; }
 .modal-box button { padding: 10px; }
 
 /* ---------- toasts */

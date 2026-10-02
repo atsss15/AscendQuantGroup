@@ -5,13 +5,14 @@
   "description": "Trading games and tools for Emory Ascend Quant Group",
   "type": "module",
   "scripts": {
-    "start": "node games/smash/server.js",
-    "smash": "node games/smash/server.js",
-    "dev": "node --watch games/smash/server.js",
+    "start": "node --env-file-if-exists=.env games/smash/server.js",
+    "smash": "node --env-file-if-exists=.env games/smash/server.js",
+    "dev": "node --env-file-if-exists=.env --watch games/smash/server.js",
+    "share": "SHARE=1 node --env-file-if-exists=.env games/smash/server.js",
     "test": "node --test"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22.9"
   },
   "repository": {
     "type": "git",

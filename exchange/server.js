@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import http from 'node:http';
+import { spawn } from 'node:child_process';
 import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
@@ -20,6 +21,16 @@ const CORE_ADMIN_COMMANDS = {
   settle: (ex, { marketId, price }) => ex.settleMarket(marketId, price),
   deleteMarket: (ex, { marketId }) => ex.deleteMarket(marketId),
   cancelOrders: (ex, { marketId = null } = {}) => ex.cancelAll(null, marketId),
+  createAccount: (ex, { name }) => {
+    ex.createAccount(name);
+  },
+  setBankroll: (ex, { userId, amount }) => ex.setBankroll(userId, amount),
+  resetPassword: (ex, { userId }) => ex.resetPassword(userId),
+  addWager: (ex, { userId, amount, note }) => {
+    ex.addWager(userId, amount, note);
+  },
+  deleteWager: (ex, { wagerId }) => ex.deleteWager(wagerId),
+  markWagersPaid: (ex, { userId }) => ex.markWagersPaid(userId),
 };
 
 /** Apply fn to one market ({ marketId }) or a whole group ({ groupId }). */
@@ -36,7 +47,9 @@ function forTargets(ex, { marketId, groupId } = {}, fn) {
  *   id            short slug, used for the save file and browser storage keys
  *   title         shown in the header
  *   rules         optional text shown to players
- *   config        Exchange config (maxPosition, maxOrderQty, market: { min, max, tick }, ...)
+ *   config        Exchange config (startingBankroll, openSignup, maxPosition, maxOrderQty, market: { min, max, tick }, ...)
+ *   accounts      optional list of account names to create (players set their password on first sign-in)
+ *   admins        optional account names that are admins; their password is always the admin password
  *   adminCommands { name: (exchange, args) => void }, callable from the admin UI
  *   publicDir     optional folder served at /game/
  *   clientScripts optional scripts (under /game/) loaded into the page, e.g. a custom admin panel
@@ -50,8 +63,22 @@ export function createExchangeServer(game, opts = {}) {
   const adminCommands = { ...CORE_ADMIN_COMMANDS, ...game.adminCommands };
   const adminTokens = new Set();
 
+  // Admin accounts sign in with the admin password and get admin rights with it.
+  const adminNames = new Set((game.admins ?? []).map((n) => n.toLowerCase()));
+  const isAdminAccount = (user) => adminNames.has(user.name.toLowerCase());
+  if (adminNames.size && adminPassword.length < 4) throw new Error('ADMIN_PASSWORD must be at least 4 characters');
+  for (const name of game.admins ?? []) {
+    exchange.setPassword(exchange.ensureAccount(name).id, adminPassword);
+  }
+  const resetPassword = adminCommands.resetPassword;
+  adminCommands.resetPassword = (ex, args) => {
+    if (isAdminAccount(ex.getUser(args.userId))) throw new ExchangeError('Admin accounts use ADMIN_PASSWORD; change it there');
+    resetPassword(ex, args);
+  };
+
   const app = express();
   app.use(express.static(CORE_PUBLIC));
+  app.get('/admin', (req, res) => res.sendFile(path.join(CORE_PUBLIC, 'index.html')));
   if (game.publicDir) app.use('/game', express.static(game.publicDir));
   app.get('/game.json', (req, res) => {
     res.json({ id: game.id, title: game.title, rules: game.rules ?? '', scripts: game.clientScripts ?? [] });
@@ -66,15 +93,36 @@ export function createExchangeServer(game, opts = {}) {
     flushTimer ??= setTimeout(flush, 50);
   });
 
+  // password reset: kick that account's open sessions
+  exchange.on('signout', (userId) => {
+    for (const socket of io.of('/').sockets.values()) {
+      if (socket.data.userId !== userId) continue;
+      socket.data.userId = null;
+      socket.data.isAdmin = !!socket.data.adminByPassword;
+      socket.emit('signedOut', { reason: 'Your password was reset by the admin. Sign in again.' });
+    }
+  });
+
   function flush() {
     flushTimer = null;
     io.emit('state', exchange.publicState());
+    const sockets = [...io.of('/').sockets.values()];
     const cache = new Map();
-    for (const socket of io.of('/').sockets.values()) {
+    for (const socket of sockets) {
       const id = socket.data.userId;
       if (!id) continue;
       if (!cache.has(id)) cache.set(id, exchange.userState(id));
       socket.emit('me', cache.get(id));
+    }
+    const admins = sockets.filter((s) => s.data.isAdmin);
+    if (admins.length) {
+      const online = new Set(sockets.map((s) => s.data.userId).filter(Boolean));
+      const state = exchange.adminState();
+      for (const a of state.accounts) {
+        a.online = online.has(a.id);
+        a.admin = adminNames.has(a.name.toLowerCase());
+      }
+      for (const socket of admins) socket.emit('admin', state);
     }
     scheduleSave();
   }
@@ -104,10 +152,18 @@ export function createExchangeServer(game, opts = {}) {
     };
 
     handle(socket, 'join', (payload) => {
-      const user = exchange.join(payload);
+      const { user, firstSignIn } = exchange.join(payload);
       socket.data.userId = user.id;
+      socket.data.isAdmin = socket.data.adminByPassword || isAdminAccount(user);
       socket.emit('me', exchange.userState(user.id));
-      return { user: { id: user.id, name: user.name, token: user.token } };
+      flushTimer ??= setTimeout(flush, 50); // update admins' online list and send the admin view
+      return { user: { id: user.id, name: user.name, token: user.token }, firstSignIn: !!firstSignIn, isAdmin: socket.data.isAdmin };
+    });
+
+    handle(socket, 'signOut', () => {
+      socket.data.userId = null;
+      socket.data.isAdmin = !!socket.data.adminByPassword;
+      flushTimer ??= setTimeout(flush, 50);
     });
 
     handle(socket, 'order', (payload) => {
@@ -123,13 +179,14 @@ export function createExchangeServer(game, opts = {}) {
 
     handle(socket, 'admin:login', ({ password, adminToken } = {}) => {
       if (adminToken && adminTokens.has(adminToken)) {
-        socket.data.isAdmin = true;
+        socket.data.isAdmin = socket.data.adminByPassword = true;
         return { adminToken };
       }
       if (!password || !safeEqual(password, adminPassword)) throw new ExchangeError('Wrong admin password');
       const token = randomBytes(16).toString('hex');
       adminTokens.add(token);
-      socket.data.isAdmin = true;
+      socket.data.isAdmin = socket.data.adminByPassword = true;
+      flushTimer ??= setTimeout(flush, 50); // send the admin view
       return { adminToken: token };
     });
 
@@ -146,6 +203,7 @@ export function createExchangeServer(game, opts = {}) {
       httpServer.listen(port, () => {
         const actual = httpServer.address().port;
         if (!opts.quiet) printBanner(game, actual, adminPassword, dataFile);
+        if (opts.share ?? process.env.SHARE) startTunnel(actual);
         resolve(actual);
       });
     });
@@ -190,13 +248,16 @@ function handle(socket, event, fn) {
 }
 
 function loadExchange(game, dataFile) {
+  let exchange;
   if (dataFile && fs.existsSync(dataFile)) {
-    const exchange = Exchange.fromJSON(JSON.parse(fs.readFileSync(dataFile, 'utf8')), game.config);
+    exchange = Exchange.fromJSON(JSON.parse(fs.readFileSync(dataFile, 'utf8')), game.config);
     console.log(`Loaded saved state from ${dataFile}`);
-    return exchange;
+  } else {
+    exchange = new Exchange(game.config);
+    game.setup?.(exchange);
   }
-  const exchange = new Exchange(game.config);
-  game.setup?.(exchange);
+  // also runs on saved games, so names added to the list later get accounts
+  for (const name of game.accounts ?? []) exchange.ensureAccount(name);
   return exchange;
 }
 
@@ -211,8 +272,32 @@ function printBanner(game, port, adminPassword, dataFile) {
     .filter((i) => i && i.family === 'IPv4' && !i.internal)
     .map((i) => `http://${i.address}:${port}`);
   console.log(`\n  ${game.title}`);
-  console.log(`  Local:    http://localhost:${port}`);
-  for (const url of lan) console.log(`  Network:  ${url}`);
-  console.log(`  Admin password: ${adminPassword}${process.env.ADMIN_PASSWORD ? ' (from ADMIN_PASSWORD)' : ' (set ADMIN_PASSWORD to choose one)'}`);
+  console.log(`  On this computer:  http://localhost:${port}          admin: http://localhost:${port}/admin`);
+  for (const url of lan) console.log(`  Same Wi-Fi:         ${url}     admin: ${url}/admin`);
+  const admins = game.admins?.length ? `, also the password for ${game.admins.join(', ')}` : '';
+  console.log(`  Admin password: ${process.env.ADMIN_PASSWORD ? '(from ADMIN_PASSWORD in .env)' : `${adminPassword} (random; put ADMIN_PASSWORD in .env to choose one)`}${admins}`);
   console.log(`  Saving to: ${dataFile || '(not persisted)'}\n`);
+}
+
+/** Expose the server publicly through a Cloudflare quick tunnel and print the links to share. */
+function startTunnel(port) {
+  console.log('  Starting public tunnel…');
+  const child = spawn('cloudflared', ['tunnel', '--no-autoupdate', '--url', `http://localhost:${port}`]);
+  let shown = false;
+  const scan = (chunk) => {
+    const url = !shown && String(chunk).match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/)?.[0];
+    if (!url) return;
+    shown = true;
+    console.log('\n  ================ Share these links ================');
+    console.log(`  Players:  ${url}`);
+    console.log(`  Admin:    ${url}/admin`);
+    console.log('  (valid while this terminal stays open)\n');
+  };
+  child.stdout.on('data', scan);
+  child.stderr.on('data', scan);
+  child.on('error', (err) => {
+    if (err.code === 'ENOENT') console.log('  Could not start the tunnel: install it with `brew install cloudflared`, then run `npm run share` again.');
+    else console.log(`  Tunnel error: ${err.message}`);
+  });
+  process.on('exit', () => child.kill());
 }

@@ -1,11 +1,15 @@
 import { EventEmitter } from 'node:events';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { OrderBook } from './orderbook.js';
 
 /** An error whose message is safe to show to the player (bad input, rule violation). */
 export class ExchangeError extends Error {}
 
 const DEFAULT_CONFIG = {
+  // number: every account starts with this much cash, and orders must be covered by it (see available()).
+  // null: P&L-only scoring, no spending limit.
+  startingBankroll: null,
+  openSignup: true, // false: only accounts created by the game or the admin can sign in
   maxPosition: null, // per user per market, counting resting orders as if filled; null = unlimited
   maxOrderQty: 1000,
   anonymousTrades: true, // hide buyer/seller names on the public tape
@@ -14,13 +18,17 @@ const DEFAULT_CONFIG = {
 };
 
 /**
- * Game-agnostic exchange: users, markets, order matching, positions, settlement.
+ * Game-agnostic exchange: accounts, markets, order matching, bankrolls, settlement.
  *
- * Accounting is P&L only: nobody has a cash balance to run out of. For each user and market we track
- * `flows[marketId]` (cash paid/received) and `positions[marketId]` (contracts held), so
- * P&L = flows + position * mark. Settlement converts the position into cash at the settlement price.
+ * Each account has `cash` (its bankroll) that trades move directly: buying costs price × qty,
+ * selling receives it, and settlement pays position × settlement price. Equity = cash + position × mark.
+ * `deposits` is the starting bankroll plus admin adjustments, so P&L = equity − deposits.
+ * `flows[marketId]` tracks cash per market for per-market P&L.
  *
- * Emits 'change' after every state mutation.
+ * Separately, `wagers` is a real-money ledger (dollars, not chips) the admin records per account,
+ * e.g. side bets on a game. Unpaid entries add up to what each person is owed / owes when settling up.
+ *
+ * Emits 'change' after every state mutation, and 'signout' (userId) when a user's sessions are revoked.
  */
 export class Exchange extends EventEmitter {
   constructor(config = {}) {
@@ -30,6 +38,7 @@ export class Exchange extends EventEmitter {
     this.markets = new Map();
     this.orders = new Map(); // resting orders only
     this.trades = [];
+    this.wagers = []; // { id, userId, amount, note, paid, ts }
     this.seq = 0;
   }
 
@@ -41,28 +50,133 @@ export class Exchange extends EventEmitter {
     this.emit('change');
   }
 
-  // ---------------------------------------------------------------- users
+  // ---------------------------------------------------------------- accounts
 
-  /** Rejoin with a token, or join as a new user with a unique name. */
-  join({ name, token } = {}) {
-    if (token) {
-      for (const u of this.users.values()) if (u.token === token) return u;
-    }
-    const clean = String(name ?? '').trim().replace(/\s+/g, ' ').slice(0, 24);
-    if (!clean) throw new ExchangeError('Pick a name to join');
-    for (const u of this.users.values()) {
-      if (u.name.toLowerCase() === clean.toLowerCase()) throw new ExchangeError(`"${clean}" is taken, pick another name`);
-    }
-    const user = { id: this.nextId('u'), name: clean, token: randomUUID(), positions: {}, flows: {}, createdAt: Date.now() };
-    this.users.set(user.id, user);
-    this.changed();
-    return user;
+  findUser(name) {
+    const key = String(name ?? '').trim().toLowerCase();
+    for (const u of this.users.values()) if (u.name.toLowerCase() === key) return u;
+    return null;
   }
 
   getUser(id) {
     const user = this.users.get(id);
     if (!user) throw new ExchangeError('Unknown user');
     return user;
+  }
+
+  createAccount(name) {
+    const clean = String(name ?? '').trim().replace(/\s+/g, ' ').slice(0, 24);
+    if (!clean) throw new ExchangeError('Account needs a name');
+    if (this.findUser(clean)) throw new ExchangeError(`"${clean}" already exists`);
+    const starting = this.config.startingBankroll ?? 0;
+    const user = {
+      id: this.nextId('u'),
+      name: clean,
+      password: null, // set on first sign-in
+      token: randomUUID(),
+      cash: starting,
+      deposits: starting,
+      positions: {},
+      flows: {},
+      createdAt: Date.now(),
+    };
+    this.users.set(user.id, user);
+    this.changed();
+    return user;
+  }
+
+  /** Create the account if it doesn't exist yet. */
+  ensureAccount(name) {
+    return this.findUser(name) ?? this.createAccount(name);
+  }
+
+  /**
+   * Sign in with a saved session token, or with name + password.
+   * The first sign-in to an account without a password sets it. With openSignup, unknown names create an account.
+   */
+  join({ name, password, token } = {}) {
+    if (token) {
+      for (const u of this.users.values()) if (u.token === token) return { user: u };
+      throw new ExchangeError('Session expired, please sign in again');
+    }
+    let user = this.findUser(name);
+    if (user?.password) {
+      if (!verifyPassword(user.password, password)) throw new ExchangeError('Wrong password');
+      return { user };
+    }
+    validatePassword(password);
+    if (!user) {
+      if (!this.config.openSignup) throw new ExchangeError('No account with that name');
+      user = this.createAccount(name);
+    }
+    this.setPassword(user.id, password);
+    return { user, firstSignIn: true };
+  }
+
+  setPassword(userId, password) {
+    validatePassword(password);
+    this.getUser(userId).password = hashPassword(password);
+    this.changed();
+  }
+
+  /** Admin: clear a password so the next sign-in sets a new one, and sign out the account everywhere. */
+  resetPassword(userId) {
+    const user = this.getUser(userId);
+    user.password = null;
+    user.token = randomUUID();
+    this.emit('signout', user.id);
+    this.changed();
+  }
+
+  /** Admin: set an account's cash. The difference counts as a deposit/withdrawal, not trading P&L. */
+  setBankroll(userId, amount) {
+    const user = this.getUser(userId);
+    amount = amount === '' || amount == null ? NaN : Number(amount);
+    if (!Number.isFinite(amount)) throw new ExchangeError('Chips must be a number');
+    user.deposits += amount - user.cash;
+    user.cash = amount;
+    this.changed();
+  }
+
+  // ---------------------------------------------------------------- dollar wagers
+
+  /** Record a real-money result for an account: positive = they're owed, negative = they owe. */
+  addWager(userId, amount, note = '') {
+    const user = this.getUser(userId);
+    amount = amount === '' || amount == null ? NaN : Math.round(Number(amount) * 100) / 100;
+    if (!Number.isFinite(amount) || amount === 0) throw new ExchangeError('Enter a dollar amount, e.g. 5 or -5');
+    const entry = { id: this.nextId('w'), userId: user.id, amount, note: String(note ?? '').trim().slice(0, 100), paid: false, ts: Date.now() };
+    this.wagers.push(entry);
+    this.changed();
+    return entry;
+  }
+
+  deleteWager(wagerId) {
+    const i = this.wagers.findIndex((w) => w.id === wagerId);
+    if (i === -1) throw new ExchangeError('Wager entry not found');
+    this.wagers.splice(i, 1);
+    this.changed();
+  }
+
+  /** Settle up: mark all of an account's open wager entries as paid. */
+  markWagersPaid(userId) {
+    const user = this.getUser(userId);
+    for (const w of this.wagers) {
+      if (w.userId === user.id && !w.paid) {
+        w.paid = true;
+        w.paidAt = Date.now();
+      }
+    }
+    this.changed();
+  }
+
+  /** Dollars still to settle for an account. */
+  wagerBalance(user) {
+    return Math.round(this.wagers.reduce((sum, w) => sum + (w.userId === user.id && !w.paid ? w.amount : 0), 0) * 100) / 100;
+  }
+
+  wagerView(w) {
+    return { id: w.id, userId: w.userId, name: this.users.get(w.userId)?.name, amount: w.amount, note: w.note, paid: w.paid, ts: w.ts };
   }
 
   // ---------------------------------------------------------------- markets
@@ -143,6 +257,7 @@ export class Exchange extends EventEmitter {
       const pos = user.positions[market.id];
       if (pos) {
         user.flows[market.id] = (user.flows[market.id] ?? 0) + pos * price;
+        user.cash += pos * price;
         delete user.positions[market.id];
       }
     }
@@ -189,6 +304,7 @@ export class Exchange extends EventEmitter {
       throw new ExchangeError(`Price must be ${market.min}-${market.max} in steps of ${market.tick}`);
     }
     this.checkPositionLimit(user, market, side, qty);
+    this.checkBankroll(user, market, { side, price, remaining: qty });
 
     const order = {
       id: this.nextId('o'),
@@ -230,6 +346,43 @@ export class Exchange extends EventEmitter {
     }
   }
 
+  checkBankroll(user, market, newOrder) {
+    const available = this.available(user, market.id, newOrder);
+    if (available !== null && available < 0) {
+      throw new ExchangeError(`Not enough chips: this order could lose ${round2(-available)} more than you have available`);
+    }
+  }
+
+  /**
+   * Settlement value of a user's position plus resting orders in one market, in the worst case.
+   * Buys hurt most if everything fills and it settles at min; sells if it settles at max.
+   */
+  worstCase(user, market, extraOrder = null) {
+    const pos = user.positions[market.id] ?? 0;
+    let atMin = pos * market.min;
+    let atMax = pos * market.max;
+    const orders = market.book.allOrders().filter((o) => o.userId === user.id);
+    if (extraOrder) orders.push(extraOrder);
+    for (const o of orders) {
+      if (o.side === 'buy') atMin += o.remaining * (market.min - o.price);
+      else atMax += o.remaining * (o.price - market.max);
+    }
+    return Math.min(atMin, atMax);
+  }
+
+  /**
+   * Cash left over after covering the worst case of every open position and order: what a user can still risk.
+   * Optionally includes a hypothetical new order. null when bankrolls are off.
+   */
+  available(user, marketId = null, extraOrder = null) {
+    if (this.config.startingBankroll == null) return null;
+    let total = user.cash;
+    for (const m of this.markets.values()) {
+      if (m.status !== 'settled') total += this.worstCase(user, m, m.id === marketId ? extraOrder : null);
+    }
+    return total;
+  }
+
   recordFill(market, { maker, taker, price, qty }) {
     const buy = maker.side === 'buy' ? maker : taker;
     const sell = maker.side === 'buy' ? taker : maker;
@@ -259,6 +412,7 @@ export class Exchange extends EventEmitter {
     if (pos === 0) delete user.positions[marketId];
     else user.positions[marketId] = pos;
     user.flows[marketId] = (user.flows[marketId] ?? 0) + dCash;
+    user.cash += dCash;
   }
 
   /** Cancel one order. Pass userId = null to cancel as admin. */
@@ -300,14 +454,19 @@ export class Exchange extends EventEmitter {
     return mark;
   }
 
-  pnl(user) {
-    let total = 0;
-    for (const [marketId, flow] of Object.entries(user.flows)) {
+  /** Cash plus open positions at their mark. */
+  equity(user) {
+    let total = user.cash;
+    for (const [marketId, pos] of Object.entries(user.positions)) {
       const market = this.markets.get(marketId);
-      if (!market) continue;
-      total += flow + (user.positions[marketId] ?? 0) * (this.mark(market) ?? 0);
+      if (market) total += pos * (this.mark(market) ?? 0);
     }
     return total;
+  }
+
+  /** Trading P&L: equity minus starting bankroll and admin adjustments. */
+  pnl(user) {
+    return this.equity(user) - user.deposits;
   }
 
   marketView(m) {
@@ -350,13 +509,18 @@ export class Exchange extends EventEmitter {
       markets: [...this.markets.values()].map((m) => this.marketView(m)),
       trades: this.trades.slice(-100).map((t) => this.tradeView(t)),
       leaderboard: [...this.users.values()]
-        .map((u) => ({ name: u.name, pnl: this.pnl(u) }))
-        .sort((a, b) => b.pnl - a.pnl),
-      config: { maxPosition: this.config.maxPosition, maxOrderQty: this.config.maxOrderQty },
+        .map((u) => ({ name: u.name, equity: this.equity(u), pnl: this.pnl(u) }))
+        .sort((a, b) => b.equity - a.equity || a.name.localeCompare(b.name)),
+      config: {
+        maxPosition: this.config.maxPosition,
+        maxOrderQty: this.config.maxOrderQty,
+        startingBankroll: this.config.startingBankroll,
+        openSignup: this.config.openSignup,
+      },
     };
   }
 
-  /** One player's private view: positions, open orders, fills. */
+  /** One player's private view: bankroll, positions, open orders, fills. */
   userState(userId) {
     const user = this.getUser(userId);
     const marketIds = new Set([...Object.keys(user.flows), ...Object.keys(user.positions)]);
@@ -372,7 +536,12 @@ export class Exchange extends EventEmitter {
     return {
       id: user.id,
       name: user.name,
+      cash: user.cash,
+      equity: this.equity(user),
       pnl: this.pnl(user),
+      available: this.available(user),
+      wagerBalance: this.wagerBalance(user),
+      wagers: this.wagers.filter((w) => w.userId === user.id).map((w) => this.wagerView(w)),
       positions,
       orders: [...this.orders.values()].filter((o) => o.userId === user.id).map((o) => this.orderView(o)),
       trades: this.trades
@@ -382,22 +551,45 @@ export class Exchange extends EventEmitter {
     };
   }
 
+  /** Account details for the admin. */
+  adminState() {
+    return {
+      accounts: [...this.users.values()].map((u) => ({
+        id: u.id,
+        name: u.name,
+        cash: u.cash,
+        equity: this.equity(u),
+        pnl: this.pnl(u),
+        wagerBalance: this.wagerBalance(u),
+        hasPassword: !!u.password,
+      })),
+      wagers: this.wagers.map((w) => this.wagerView(w)),
+    };
+  }
+
   // ---------------------------------------------------------------- persistence
 
   toJSON() {
     return {
-      version: 1,
+      version: 2,
       seq: this.seq,
       users: [...this.users.values()],
       markets: [...this.markets.values()].map(({ book, ...m }) => ({ ...m, bids: book.bids, asks: book.asks })),
       trades: this.trades,
+      wagers: this.wagers,
     };
   }
 
   static fromJSON(data, config) {
     const ex = new Exchange(config);
     ex.seq = data.seq;
-    for (const u of data.users) ex.users.set(u.id, u);
+    for (const u of data.users) {
+      // version 1 saves had P&L-only accounts
+      u.password ??= null;
+      u.deposits ??= ex.config.startingBankroll ?? 0;
+      u.cash ??= u.deposits + Object.values(u.flows).reduce((a, b) => a + b, 0);
+      ex.users.set(u.id, u);
+    }
     for (const { bids, asks, ...m } of data.markets) {
       const book = new OrderBook();
       book.bids = bids;
@@ -406,6 +598,27 @@ export class Exchange extends EventEmitter {
       for (const o of [...bids, ...asks]) ex.orders.set(o.id, o);
     }
     ex.trades = data.trades;
+    ex.wagers = data.wagers ?? [];
     return ex;
   }
+}
+
+function round2(n) {
+  return Math.round(n * 100) / 100;
+}
+
+function validatePassword(password) {
+  if (typeof password !== 'string' || password.length < 4) throw new ExchangeError('Choose a password of at least 4 characters');
+  if (password.length > 200) throw new ExchangeError('Password is too long');
+}
+
+function hashPassword(password) {
+  const salt = randomBytes(16).toString('hex');
+  return { salt, hash: scryptSync(password, salt, 32).toString('hex') };
+}
+
+function verifyPassword(stored, password) {
+  if (typeof password !== 'string') return false;
+  const hash = scryptSync(password, stored.salt, 32);
+  return timingSafeEqual(hash, Buffer.from(stored.hash, 'hex'));
 }

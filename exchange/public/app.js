@@ -37,6 +37,8 @@
 
   const round1 = (n) => Math.round(n * 10) / 10;
   const fmtPnl = (n) => (n > 0 ? '+' : '') + round1(n).toLocaleString();
+  const fmtUsd = (n) => `${n > 0 ? '+' : n < 0 ? '−' : ''}$${Math.abs(n).toFixed(2)}`;
+  const fmtMoney = (n) => (n == null ? '–' : round1(n).toLocaleString());
   const fmtPos = (n) => (n > 0 ? '+' : '') + n;
   const fmtPx = (n) => (n == null ? '–' : String(round1(n)));
   const sign = (n) => (n > 0 ? 'up' : n < 0 ? 'down' : '');
@@ -44,7 +46,7 @@
 
   // ------------------------------------------------------------------ state + socket
 
-  const store = { game: null, state: null, me: null, isAdmin: false };
+  const store = { game: null, state: null, me: null, isAdmin: false, adminState: null };
   const socket = io({ autoConnect: false });
   let keys = null;
 
@@ -64,55 +66,106 @@
     setTimeout(() => el.remove(), 4000);
   }
 
-  // ------------------------------------------------------------------ joining
+  // ------------------------------------------------------------------ signing in
 
-  function showJoin() {
-    $('#join').hidden = false;
-    $('#join-name').focus();
+  const isAdminPage = location.pathname.replace(/\/+$/, '') === '/admin';
+
+  // The name picker is a dropdown of accounts when sign-up is closed, a text box otherwise.
+  let joinNamesKey = '';
+  function renderJoinName() {
+    const cfg = store.state?.config;
+    const names = (store.state?.leaderboard ?? []).map((u) => u.name).sort((a, b) => a.localeCompare(b));
+    const key = `${cfg?.openSignup}|${names.join(',')}`;
+    if (key === joinNamesKey) return;
+    joinNamesKey = key;
+    const prev = $('#join-name')?.value || storage.get(keys.lastName) || '';
+    const field = cfg && !cfg.openSignup
+      ? h('select', { id: 'join-name', required: true }, h('option', { value: '' }, 'Who are you?'), names.map((n) => h('option', { value: n }, n)))
+      : h('input', { id: 'join-name', maxLength: 24, placeholder: 'Your name', autocomplete: 'username', required: true });
+    field.value = prev;
+    $('#join-name-field').replaceChildren(field);
   }
 
-  async function join(payload) {
-    const res = await call('join', payload);
-    if (res.ok) {
-      storage.set(keys.token, res.user.token);
-      $('#join').hidden = true;
-    }
-    return res;
+  function showJoin() {
+    renderJoinName();
+    $('#join').hidden = false;
+    ($('#join-name').value ? $('#join-password') : $('#join-name')).focus();
+  }
+
+  function signedIn({ user, isAdmin }) {
+    storage.set(keys.token, user.token);
+    storage.set(keys.lastName, user.name);
+    $('#join').hidden = true;
+    $('#join-error').textContent = '';
+    if (isAdmin) setAdmin(true);
+  }
+
+  function signedOut() {
+    storage.del(keys.token);
+    store.me = null;
+    seenTrades = null;
+    if (!storage.get(keys.admin)) setAdmin(false); // admin rights came from the account
+    render();
   }
 
   $('#join-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const res = await join({ name: $('#join-name').value });
-    $('#join-error').textContent = res.ok ? '' : res.error;
+    const res = await call('join', { name: $('#join-name').value, password: $('#join-password').value });
+    if (!res.ok) {
+      $('#join-error').textContent = res.error;
+      return;
+    }
+    $('#join-password').value = '';
+    signedIn(res);
+    if (res.firstSignIn) toast(`Welcome ${res.user.name}! Your password is saved, use it next time.`);
+  });
+  $('#join-close').addEventListener('click', () => {
+    $('#join').hidden = true;
+  });
+  $('#signin-btn').addEventListener('click', showJoin);
+  $('#signout-btn').addEventListener('click', async () => {
+    await call('signOut');
+    signedOut();
   });
 
   socket.on('connect', async () => {
     setConnected(true);
     const token = storage.get(keys.token);
     if (token) {
-      const res = await join({ token });
-      if (!res.ok) {
-        storage.del(keys.token); // server was reset
-        showJoin();
+      const res = await call('join', { token });
+      if (res.ok) signedIn(res);
+      else {
+        storage.del(keys.token); // password was reset, or the server was reset
+        if (!isAdminPage) showJoin();
       }
-    } else showJoin();
+    } else if (!isAdminPage) showJoin();
 
     const adminToken = storage.get(keys.admin);
     if (adminToken) {
       const res = await call('admin:login', { adminToken });
       if (!res.ok) storage.del(keys.admin);
-      setAdmin(res.ok);
+      else setAdmin(true);
     }
   });
 
+  socket.on('signedOut', ({ reason }) => {
+    signedOut();
+    toast(reason, 'error');
+    showJoin();
+  });
   socket.on('disconnect', () => setConnected(false));
   socket.on('state', (state) => {
     store.state = state;
+    if (!$('#join').hidden) renderJoinName();
     render();
   });
   socket.on('me', (me) => {
     announceFills(me);
     store.me = me;
+    render();
+  });
+  socket.on('admin', (adminState) => {
+    store.adminState = adminState;
     render();
   });
 
@@ -180,15 +233,31 @@
       renderPositions();
       renderOrders();
       renderLeaderboard();
+      renderWagers();
       renderTape();
       for (const p of adminPanels) if (p.el) p.update?.(store.state, store.me);
     });
   }
 
+  const bankrollMode = () => store.state?.config.startingBankroll != null;
+
   function renderHeader() {
     const me = store.me;
+    $('#signin-btn').hidden = !!me;
+    $('#signout-btn').hidden = !me;
+    if (!me) return $('#me-summary').replaceChildren();
+    const stat = (label, value, cls = '', title = '') => h('span', { class: 'stat', title }, label, ' ', h('b', { class: cls }, value));
     $('#me-summary').replaceChildren(
-      me ? h('span', {}, h('b', {}, me.name), ' P&L ', h('b', { class: sign(me.pnl) }, fmtPnl(me.pnl))) : '',
+      h('b', {}, me.name),
+      ...(bankrollMode()
+        ? [
+            stat('chips', fmtMoney(me.cash), '', 'Chips in your account'),
+            stat('equity', fmtMoney(me.equity), '', 'Chips plus open positions at their mark'),
+            stat('P&L', fmtPnl(me.pnl), sign(me.pnl), 'Equity minus starting chips and admin adjustments'),
+            stat('available', fmtMoney(me.available), '', 'What you can still risk: chips minus the worst-case loss of your positions and orders'),
+          ]
+        : [stat('P&L', fmtPnl(me.pnl), sign(me.pnl))]),
+      me.wagers.length ? stat('wagers', fmtUsd(me.wagerBalance), sign(me.wagerBalance), 'Real-money wagers still to settle') : '',
     );
   }
 
@@ -437,16 +506,40 @@
   }
 
   function renderLeaderboard() {
+    const withEquity = bankrollMode();
     const rows = store.state.leaderboard.map((u, i) =>
       h(
         'tr',
         { class: u.name === store.me?.name ? 'me' : '' },
         h('td', { class: 'num muted' }, i + 1),
         h('td', {}, u.name),
+        withEquity ? h('td', { class: 'num' }, fmtMoney(u.equity)) : '',
         h('td', { class: `num ${sign(u.pnl)}` }, fmtPnl(u.pnl)),
       ),
     );
-    $('#leaderboard').replaceChildren(table(['#', 'trader', 'P&L'], rows, 'Nobody has joined yet.'));
+    const head = withEquity ? ['#', 'trader', 'equity', 'P&L'] : ['#', 'trader', 'P&L'];
+    $('#leaderboard').replaceChildren(table(head, rows, 'Nobody has joined yet.'));
+  }
+
+  function renderWagers() {
+    const wagers = store.me?.wagers ?? [];
+    $('#wagers-panel').hidden = !wagers.length;
+    if (!wagers.length) return;
+    const rows = [...wagers].reverse().map((w) =>
+      h(
+        'tr',
+        { class: w.paid ? 'paid' : '' },
+        h('td', { class: 'muted' }, new Date(w.ts).toLocaleDateString([], { month: 'short', day: 'numeric' })),
+        h('td', {}, w.note || '–'),
+        h('td', { class: `num ${sign(w.amount)}` }, fmtUsd(w.amount)),
+        h('td', { class: 'muted' }, w.paid ? 'paid' : 'open'),
+      ),
+    );
+    $('#wagers').replaceChildren(
+      h('p', { class: 'small' }, 'To settle: ', h('b', { class: sign(store.me.wagerBalance) }, fmtUsd(store.me.wagerBalance)),
+        h('span', { class: 'muted' }, store.me.wagerBalance > 0 ? ' (you are owed)' : store.me.wagerBalance < 0 ? ' (you owe)' : '')),
+      table(['date', 'for', '$', ''], rows, ''),
+    );
   }
 
   function renderTape() {
@@ -502,19 +595,21 @@
       $('#admin-login').replaceChildren(
         h('div', { class: 'admin-head' }, h('b', {}, 'Admin mode'), h('button', { type: 'button', class: 'link', onclick: () => {
           storage.del(keys.admin);
+          storage.del(keys.token);
           location.reload();
         } }, 'log out')),
       );
       return;
     }
     const pw = h('input', { id: 'admin-password', type: 'password', placeholder: 'Admin password', autocomplete: 'current-password' });
+    const hint = h('span', { class: 'muted small' }, 'or sign in with an admin account');
     const form = h('form', { class: 'inline', onsubmit: async (e) => {
       e.preventDefault();
       const res = await call('admin:login', { password: pw.value });
       if (!res.ok) return toast(res.error, 'error');
       storage.set(keys.admin, res.adminToken);
       setAdmin(true);
-    } }, pw, h('button', { type: 'submit', class: 'primary' }, 'Log in'));
+    } }, pw, h('button', { type: 'submit', class: 'primary' }, 'Log in'), hint);
     $('#admin-login').replaceChildren(form);
   }
 
@@ -524,13 +619,164 @@
     document.body.classList.toggle('is-admin', on);
     renderAdminLogin();
     if (on) adminPanels.forEach(mountPanel);
+    else {
+      for (const p of adminPanels) {
+        p.el?.remove();
+        p.el = null;
+      }
+      store.adminState = null;
+    }
     render();
   }
+
+  // Core admin panel: accounts, chips and password resets.
+  registerAdminPanel({
+    title: 'Accounts',
+    order: 1, // after game panels
+    mount(el) {
+      this.rows = new Map();
+      this.body = h('tbody', {});
+      const name = h('input', { placeholder: 'New account name' });
+      el.append(
+        h('div', { class: 'scroll-x' }, h(
+          'table',
+          { class: 'list accounts' },
+          h('thead', {}, h('tr', {}, ['', 'name', 'password', 'chips', 'equity', 'P&L', 'wagers $', 'set chips', ''].map((t) => h('th', {}, t)))),
+          this.body,
+        )),
+        h('form', { class: 'inline', onsubmit: async (e) => {
+          e.preventDefault();
+          const res = await admin('createAccount', { name: name.value });
+          if (res.ok) {
+            toast(`Added account ${name.value}`);
+            name.value = '';
+          }
+        } }, name, h('button', { type: 'submit', class: 'small' }, 'Add account')),
+      );
+    },
+    update() {
+      const accounts = store.adminState?.accounts ?? [];
+      for (const [id, row] of this.rows) {
+        if (!accounts.some((a) => a.id === id)) {
+          row.root.remove();
+          this.rows.delete(id);
+        }
+      }
+      accounts.forEach((a, i) => {
+        if (!this.rows.has(a.id)) this.rows.set(a.id, accountRow(a));
+        const row = this.rows.get(a.id);
+        if (this.body.children[i] !== row.root) this.body.insertBefore(row.root, this.body.children[i] ?? null);
+        row.dot.className = `dot ${a.online ? 'on' : ''}`;
+        row.dot.title = a.online ? 'Online' : 'Offline';
+        row.pw.textContent = a.hasPassword ? 'set' : 'not yet';
+        row.cash.textContent = fmtMoney(a.cash);
+        row.equity.textContent = fmtMoney(a.equity);
+        row.pnl.textContent = fmtPnl(a.pnl);
+        row.pnl.className = `num ${sign(a.pnl)}`;
+        row.wager.textContent = a.wagerBalance ? fmtUsd(a.wagerBalance) : '–';
+        row.wager.className = `num ${sign(a.wagerBalance)}`;
+        row.reset.disabled = !a.hasPassword || a.admin;
+        row.reset.title = a.admin ? 'Admin account: its password is ADMIN_PASSWORD' : '';
+      });
+    },
+  });
+
+  function accountRow(a) {
+    const r = {};
+    r.dot = h('span', { class: 'dot' });
+    r.pw = h('td', { class: 'muted' });
+    r.cash = h('td', { class: 'num' });
+    r.equity = h('td', { class: 'num' });
+    r.pnl = h('td', { class: 'num' });
+    r.wager = h('td', { class: 'num' });
+    r.input = h('input', { type: 'number', class: 'price', placeholder: 'amount' });
+    const set = async () => {
+      if (r.input.value === '') return toast('Enter the new chip count', 'error');
+      const res = await admin('setBankroll', { userId: a.id, amount: Number(r.input.value) });
+      if (res.ok) {
+        toast(`${a.name} now has ${r.input.value} chips`);
+        r.input.value = '';
+      }
+    };
+    r.input.addEventListener('keydown', (e) => e.key === 'Enter' && set());
+    r.reset = h('button', { type: 'button', class: 'small', onclick: async () => {
+      if (!confirm(`Reset ${a.name}'s password? They will be signed out and choose a new one at their next sign-in.`)) return;
+      const res = await admin('resetPassword', { userId: a.id });
+      if (res.ok) toast(`${a.name}'s password was reset`);
+    } }, 'Reset password');
+    r.root = h('tr', {}, h('td', {}, r.dot), h('td', {}, a.name), r.pw, r.cash, r.equity, r.pnl, r.wager,
+      h('td', { class: 'set-cell' }, r.input, h('button', { type: 'button', class: 'small', onclick: set }, 'Set')), h('td', {}, r.reset));
+    return r;
+  }
+
+  // Core admin panel: real-money wagers, tracked per account and settled up at the end.
+  registerAdminPanel({
+    title: 'Wagers ($)',
+    order: 2,
+    mount(el) {
+      this.who = h('select', { required: true });
+      this.whoKey = '';
+      const amount = h('input', { type: 'number', step: '0.01', class: 'price', placeholder: '$ ±amount', required: true });
+      const note = h('input', { placeholder: 'What for, e.g. Game 3 vs Paul' });
+      this.owed = h('div', {});
+      this.recent = h('div', { class: 'scroll-x' });
+      el.append(
+        h('form', { class: 'inline', onsubmit: async (e) => {
+          e.preventDefault();
+          const res = await admin('addWager', { userId: this.who.value, amount: Number(amount.value), note: note.value });
+          if (res.ok) {
+            toast('Wager recorded');
+            amount.value = '';
+            note.value = '';
+          }
+        } }, this.who, amount, note, h('button', { type: 'submit', class: 'primary' }, 'Record')),
+        h('p', { class: 'muted small' }, 'Positive = they won / are owed, negative = they lost / owe. Mark paid once the money changes hands.'),
+        this.owed,
+        this.recent,
+      );
+    },
+    update() {
+      const accounts = store.adminState?.accounts ?? [];
+      const wagers = store.adminState?.wagers ?? [];
+      const key = accounts.map((a) => a.id + a.name).join();
+      if (key !== this.whoKey) {
+        this.whoKey = key;
+        const prev = this.who.value;
+        this.who.replaceChildren(h('option', { value: '' }, 'Account…'), accounts.map((a) => h('option', { value: a.id }, a.name)));
+        this.who.value = prev;
+      }
+      const open = accounts.filter((a) => wagers.some((w) => w.userId === a.id && !w.paid));
+      this.owed.replaceChildren(
+        open.length
+          ? h('div', { class: 'settle-up' }, h('b', {}, 'Settle up: '), open.map((a) =>
+              h('span', { class: 'chip' }, a.name, ' ', h('b', { class: sign(a.wagerBalance) }, fmtUsd(a.wagerBalance)), ' ',
+                h('button', { type: 'button', class: 'link', onclick: async () => {
+                  if (confirm(`Mark all of ${a.name}'s open wagers (${fmtUsd(a.wagerBalance)}) as paid?`)) admin('markWagersPaid', { userId: a.id });
+                } }, 'mark paid'))))
+          : h('p', { class: 'muted small' }, 'Nothing to settle.'),
+      );
+      const rows = wagers.slice(-15).reverse().map((w) =>
+        h(
+          'tr',
+          { class: w.paid ? 'paid' : '' },
+          h('td', { class: 'muted' }, fmtTime(w.ts)),
+          h('td', {}, w.name),
+          h('td', {}, w.note || '–'),
+          h('td', { class: `num ${sign(w.amount)}` }, fmtUsd(w.amount)),
+          h('td', { class: 'muted' }, w.paid ? 'paid' : 'open'),
+          h('td', {}, h('button', { type: 'button', class: 'link', title: 'Delete entry', onclick: () => {
+            if (confirm(`Delete ${w.name}'s ${fmtUsd(w.amount)} entry?`)) admin('deleteWager', { wagerId: w.id });
+          } }, '✕')),
+        ),
+      );
+      this.recent.replaceChildren(rows.length ? table(['time', 'account', 'for', '$', '', ''], rows, '') : '');
+    },
+  });
 
   // Core admin panel: list a standalone market. Games usually add a friendlier panel of their own.
   registerAdminPanel({
     title: 'New market',
-    order: 1, // after game panels
+    order: 3,
     mount(el) {
       const name = h('input', { placeholder: 'Name', required: true });
       const group = h('input', { placeholder: 'Group (optional)' });
@@ -561,13 +807,14 @@
     registerAdminPanel,
     get state() { return store.state; },
     get me() { return store.me; },
+    get adminState() { return store.adminState; },
     get game() { return store.game; },
   };
   window.Exchange = api;
 
   async function boot() {
     store.game = await fetch('/game.json').then((r) => r.json());
-    keys = { token: `xchg:${store.game.id}:token`, admin: `xchg:${store.game.id}:admin` };
+    keys = { token: `xchg:${store.game.id}:token`, admin: `xchg:${store.game.id}:admin`, lastName: `xchg:${store.game.id}:name` };
     document.title = store.game.title;
     $('#title').textContent = store.game.title;
     $('#join-title').textContent = store.game.title;
@@ -575,6 +822,7 @@
     $('#rules').textContent = store.game.rules;
     $('#rules-btn').hidden = !store.game.rules;
     renderAdminLogin();
+    if (isAdminPage) $('#admin').hidden = false;
     for (const src of store.game.scripts) document.body.append(h('script', { src }));
     socket.connect();
   }
