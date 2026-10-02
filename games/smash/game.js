@@ -7,24 +7,13 @@ import { ExchangeError } from '../../exchange/index.js';
  */
 export const smash = {
   id: 'smash',
-  title: 'Smash Exchange',
+  title: 'Smash Bros',
   rules:
     'Each match lists one contract per player. A contract settles to 100 if that player wins the match and 0 otherwise, ' +
     'so the price is the market\'s implied win probability. Post bids and offers, or hit/lift what is there. ' +
-    'You trade with chips, which carry over from match to match. ' +
-    'An order is only accepted if your chips cover its worst-case loss. Real-money wagers are tracked separately under your account.',
-  config: {
-    startingBankroll: 1000,
-    openSignup: false, // only the accounts below can sign in; the admin can add more
-    maxPosition: 50,
-    maxOrderQty: 50,
-    market: { min: 0, max: 100, tick: 1 },
-  },
-  // Each person sets their own password the first time they sign in.
-  admins: ['Attis'], // signs in with ADMIN_PASSWORD (set in .env) and gets the admin controls
-  accounts: ['Ashley', 'Paul', 'Frank', 'Jay', 'Thomas', 'Attis', 'Susie', 'Derrick', 'Arien', 'Buju', 'Jerry'],
+    'You trade with your chips, and an order is only accepted if your chips cover its worst-case loss.',
   publicDir: fileURLToPath(new URL('./public', import.meta.url)),
-  clientScripts: ['/game/admin.js'],
+  clientScripts: ['admin.js'],
 
   adminCommands: {
     createMatch(ex, { name, players } = {}) {
@@ -35,7 +24,8 @@ export const smash = {
       if (list.length > 8) throw new ExchangeError('At most 8 players per match');
       if (new Set(list.map((p) => p.toLowerCase())).size !== list.length) throw new ExchangeError('Player names must be different');
 
-      const matchCount = new Set([...ex.markets.values()].filter((m) => m.meta?.matchId).map((m) => m.meta.matchId)).size;
+      const sessionMarkets = ex.sessionMarkets(ex.activeSessionId).filter((m) => m.meta?.matchId);
+      const matchCount = new Set(sessionMarkets.map((m) => m.meta.matchId)).size;
       const group = { id: ex.nextId('match'), name: String(name ?? '').trim().slice(0, 60) || `Match ${matchCount + 1}` };
       for (const player of list) {
         ex.createMarket({

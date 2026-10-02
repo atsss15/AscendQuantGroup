@@ -4,11 +4,19 @@ import { io as connect } from 'socket.io-client';
 import { Exchange } from '../exchange/exchange.js';
 import { createExchangeServer } from '../exchange/server.js';
 import { smash } from '../games/smash/game.js';
+import { platform } from '../server.js';
+
+function smashNight() {
+  const ex = new Exchange(platform.config);
+  platform.accounts.forEach((n) => ex.ensureAccount(n));
+  ex.startSession({ name: 'Smash night', gameId: 'smash' });
+  return ex;
+}
 
 const { createMatch, settleMatch } = smash.adminCommands;
 
 test('createMatch lists one 0-100 contract per player', () => {
-  const ex = new Exchange(smash.config);
+  const ex = smashNight();
   createMatch(ex, { name: 'Final', players: ['Mario', 'Link', 'Kirby'] });
   const markets = [...ex.markets.values()];
   assert.deepEqual(markets.map((m) => m.name), ['Mario', 'Link', 'Kirby']);
@@ -20,8 +28,7 @@ test('createMatch lists one 0-100 contract per player', () => {
 });
 
 test('settleMatch pays the winner 100 and everyone else 0', () => {
-  const ex = new Exchange(smash.config);
-  smash.accounts.forEach((n) => ex.ensureAccount(n));
+  const ex = smashNight();
   const a = ex.join({ name: 'Ashley', password: 'pass' }).user;
   const b = ex.join({ name: 'Paul', password: 'pass' }).user;
   createMatch(ex, { players: 'Mario, Link' });
@@ -40,7 +47,7 @@ test('settleMatch pays the winner 100 and everyone else 0', () => {
 });
 
 test('end to end over sockets', { timeout: 10000 }, async (t) => {
-  const server = createExchangeServer(smash, { dataFile: null, adminPassword: 'admin-pw', quiet: true, handleSignals: false });
+  const server = createExchangeServer(platform, { dataFile: null, adminPassword: 'admin-pw', quiet: true, handleSignals: false });
   const port = await server.listen(0);
   const clients = [];
   t.after(async () => {
@@ -75,6 +82,8 @@ test('end to end over sockets', { timeout: 10000 }, async (t) => {
   assert.equal((await ask(adminC, 'admin', { cmd: 'createMatch', args: { players: ['Mario', 'Link'] } })).ok, false);
   assert.equal((await ask(adminC, 'admin:login', { password: 'nope' })).ok, false);
   assert.equal((await ask(adminC, 'admin:login', { password: 'admin-pw' })).ok, true);
+  assert.match((await ask(adminC, 'admin', { cmd: 'createMatch', args: { players: ['Mario', 'Link'] } })).error, /Start a Smash Bros session/);
+  assert.equal((await ask(adminC, 'admin', { cmd: 'startSession', args: { name: 'Night 1', gameId: 'smash' } })).ok, true);
   assert.equal((await ask(adminC, 'admin', { cmd: 'createMatch', args: { name: 'G1', players: ['Mario', 'Link'] } })).ok, true);
 
   assert.equal((await ask(alice, 'join', { name: 'Stranger', password: 'pass' })).ok, false, 'signup is closed');
@@ -111,7 +120,7 @@ test('end to end over sockets', { timeout: 10000 }, async (t) => {
   assert.equal((await ask(alice, 'join', { name: 'Attis', password: 'guess' })).ok, false);
 
   // admin edits a bankroll and resets a password, which signs that player out
-  const adminView = await next(adminC, 'admin', (s) => s.accounts.length === 11);
+  const adminView = await next(adminC, 'admin', (s) => s.accounts.length === platform.accounts.length);
   const paul = adminView.accounts.find((a) => a.name === 'Paul');
   assert.equal(paul.online, true);
   await ask(adminC, 'admin', { cmd: 'setBankroll', args: { userId: paul.id, amount: 2000 } });

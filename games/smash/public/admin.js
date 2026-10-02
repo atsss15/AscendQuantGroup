@@ -20,6 +20,7 @@
 
   registerAdminPanel({
     title: 'Smash matches',
+    gameId: 'smash', // only shown during a Smash session
 
     mount(el) {
       const name = h('input', { placeholder: 'Match name (optional)' });
@@ -97,8 +98,16 @@
       const res = await admin('settleMatch', { matchId: match.id, winner: winner.value });
       if (res.ok) toast(`${match.name} settled: ${winner.value} wins`);
     } }, 'Settle');
-    const root = h('div', { class: 'match-row' }, h('b', {}, match.name), h('span', {}, match.players.join(' vs ')), status, winner, settle);
+    const root = h('div', { class: 'match-row' }, h('b', {}, match.name), h('span', {}, match.players.join(' vs ')), status, winner, settle, deleteButton(match));
     return { root, status, settled: false };
+  }
+
+  function deleteButton(match) {
+    return h('button', { type: 'button', class: 'small danger', onclick: async () => {
+      if (!confirm(`Delete ${match.name}? Any trades in it are cancelled and everyone's chips restored.`)) return;
+      const res = await admin('deleteMarket', { groupId: match.id });
+      if (res.ok) toast(`${match.name} deleted`);
+    } }, 'Delete');
   }
 
   function settledRow(match) {
@@ -107,7 +116,7 @@
       const res = await admin('createMatch', { players: match.players });
       if (res.ok) toast(`Rematch listed: ${match.players.join(' vs ')}`);
     } }, 'Rematch');
-    const root = h('div', { class: 'match-row done' }, h('b', {}, match.name), h('span', {}, match.players.join(' vs ')), status, rematch);
+    const root = h('div', { class: 'match-row done' }, h('b', {}, match.name), h('span', {}, match.players.join(' vs ')), status, rematch, deleteButton(match));
     return { root, status, settled: true };
   }
 })();

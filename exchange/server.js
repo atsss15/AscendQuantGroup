@@ -11,7 +11,7 @@ import { Exchange, ExchangeError } from './exchange.js';
 
 const CORE_PUBLIC = fileURLToPath(new URL('./public', import.meta.url));
 
-/** Admin commands every game gets. Games add their own via `game.adminCommands`. */
+/** Admin commands that are always available. Games add their own via `game.adminCommands`. */
 const CORE_ADMIN_COMMANDS = {
   createMarket: (ex, args) => {
     ex.createMarket(args);
@@ -19,16 +19,21 @@ const CORE_ADMIN_COMMANDS = {
   halt: (ex, args) => forTargets(ex, args, (m) => m.status === 'open' && ex.setStatus(m.id, 'halted')),
   resume: (ex, args) => forTargets(ex, args, (m) => m.status === 'halted' && ex.setStatus(m.id, 'open')),
   settle: (ex, { marketId, price }) => ex.settleMarket(marketId, price),
-  deleteMarket: (ex, { marketId }) => ex.deleteMarket(marketId),
+  deleteMarket: (ex, args) => forTargets(ex, args, (m) => ex.deleteMarket(m.id)),
   cancelOrders: (ex, { marketId = null } = {}) => ex.cancelAll(null, marketId),
+  endSession: (ex) => {
+    ex.endSession();
+  },
   createAccount: (ex, { name }) => {
     ex.createAccount(name);
   },
   setBankroll: (ex, { userId, amount }) => ex.setBankroll(userId, amount),
+  setQuiz: (ex, { userId, amount }) => ex.setQuiz(userId, amount),
   resetPassword: (ex, { userId }) => ex.resetPassword(userId),
   addWager: (ex, { userId, amount, note }) => {
     ex.addWager(userId, amount, note);
   },
+  setWagerBalance: (ex, { userId, amount }) => ex.setWagerBalance(userId, amount),
   deleteWager: (ex, { wagerId }) => ex.deleteWager(wagerId),
   markWagersPaid: (ex, { userId }) => ex.markWagersPaid(userId),
 };
@@ -41,33 +46,53 @@ function forTargets(ex, { marketId, groupId } = {}, fn) {
 }
 
 /**
- * Start an exchange for a game.
+ * Start the exchange platform.
  *
- * A game is a plain object:
+ * platform:
  *   id            short slug, used for the save file and browser storage keys
  *   title         shown in the header
- *   rules         optional text shown to players
- *   config        Exchange config (startingBankroll, openSignup, maxPosition, maxOrderQty, market: { min, max, tick }, ...)
+ *   config        Exchange config (startingBankroll, openSignup, maxPosition, maxOrderQty, ...)
  *   accounts      optional list of account names to create (players set their password on first sign-in)
  *   admins        optional account names that are admins; their password is always the admin password
- *   adminCommands { name: (exchange, args) => void }, callable from the admin UI
- *   publicDir     optional folder served at /game/
- *   clientScripts optional scripts (under /game/) loaded into the page, e.g. a custom admin panel
- *   setup(exchange) optional, runs once when no save file exists
+ *   games         the games a session can run (see below)
+ *   importFrom    optional older save files to import if this platform has no save file yet
+ *
+ * game:
+ *   id, title     identify the game in the session picker
+ *   rules         shown to players while a session of this game runs
+ *   adminCommands { name: (exchange, args) => void }, callable from the admin UI while its session runs
+ *   publicDir     optional folder served at /games/<id>/
+ *   clientScripts optional files in publicDir loaded into the page, e.g. a custom admin panel
  */
-export function createExchangeServer(game, opts = {}) {
+export function createExchangeServer(platform, opts = {}) {
   const adminPassword = opts.adminPassword ?? process.env.ADMIN_PASSWORD ?? randomBytes(4).toString('hex');
-  const dataFile = opts.dataFile === undefined ? (process.env.DATA_FILE ?? path.resolve('data', `${game.id}.json`)) : opts.dataFile;
+  const dataFile = opts.dataFile === undefined ? (process.env.DATA_FILE ?? path.resolve('data', `${platform.id}.json`)) : opts.dataFile;
+  const games = platform.games ?? [];
 
-  const exchange = loadExchange(game, dataFile);
-  const adminCommands = { ...CORE_ADMIN_COMMANDS, ...game.adminCommands };
+  const exchange = loadExchange(platform, dataFile);
   const adminTokens = new Set();
+  const adminCommands = {
+    ...CORE_ADMIN_COMMANDS,
+    startSession: (ex, { name, gameId } = {}) => {
+      if (!games.some((g) => g.id === gameId)) throw new ExchangeError('Pick a game for the session');
+      ex.startSession({ name, gameId });
+    },
+  };
+  // Game commands only run during a session of that game.
+  for (const game of games) {
+    for (const [cmd, fn] of Object.entries(game.adminCommands ?? {})) {
+      adminCommands[cmd] = (ex, args) => {
+        if (ex.activeSession()?.gameId !== game.id) throw new ExchangeError(`Start a ${game.title} session first`);
+        return fn(ex, args);
+      };
+    }
+  }
 
   // Admin accounts sign in with the admin password and get admin rights with it.
-  const adminNames = new Set((game.admins ?? []).map((n) => n.toLowerCase()));
+  const adminNames = new Set((platform.admins ?? []).map((n) => n.toLowerCase()));
   const isAdminAccount = (user) => adminNames.has(user.name.toLowerCase());
   if (adminNames.size && adminPassword.length < 4) throw new Error('ADMIN_PASSWORD must be at least 4 characters');
-  for (const name of game.admins ?? []) {
+  for (const name of platform.admins ?? []) {
     exchange.setPassword(exchange.ensureAccount(name).id, adminPassword);
   }
   const resetPassword = adminCommands.resetPassword;
@@ -79,9 +104,16 @@ export function createExchangeServer(game, opts = {}) {
   const app = express();
   app.use(express.static(CORE_PUBLIC));
   app.get('/admin', (req, res) => res.sendFile(path.join(CORE_PUBLIC, 'index.html')));
-  if (game.publicDir) app.use('/game', express.static(game.publicDir));
-  app.get('/game.json', (req, res) => {
-    res.json({ id: game.id, title: game.title, rules: game.rules ?? '', scripts: game.clientScripts ?? [] });
+  for (const game of games) {
+    if (game.publicDir) app.use(`/games/${game.id}`, express.static(game.publicDir));
+  }
+  app.get('/platform.json', (req, res) => {
+    res.json({
+      id: platform.id,
+      title: platform.title,
+      games: games.map((g) => ({ id: g.id, title: g.title, rules: g.rules ?? '' })),
+      scripts: games.flatMap((g) => (g.clientScripts ?? []).map((file) => `/games/${g.id}/${file}`)),
+    });
   });
 
   const httpServer = http.createServer(app);
@@ -160,6 +192,8 @@ export function createExchangeServer(game, opts = {}) {
       return { user: { id: user.id, name: user.name, token: user.token }, firstSignIn: !!firstSignIn, isAdmin: socket.data.isAdmin };
     });
 
+    handle(socket, 'history', () => exchange.history(requireUser()));
+
     handle(socket, 'signOut', () => {
       socket.data.userId = null;
       socket.data.isAdmin = !!socket.data.adminByPassword;
@@ -199,10 +233,11 @@ export function createExchangeServer(game, opts = {}) {
   });
 
   function listen(port = opts.port ?? process.env.PORT ?? 3000) {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
+      httpServer.once('error', reject);
       httpServer.listen(port, () => {
         const actual = httpServer.address().port;
-        if (!opts.quiet) printBanner(game, actual, adminPassword, dataFile);
+        if (!opts.quiet) printBanner(platform, actual, adminPassword, dataFile);
         if (opts.share ?? process.env.SHARE) startTunnel(actual);
         resolve(actual);
       });
@@ -247,17 +282,17 @@ function handle(socket, event, fn) {
   });
 }
 
-function loadExchange(game, dataFile) {
+function loadExchange(platform, dataFile) {
   let exchange;
-  if (dataFile && fs.existsSync(dataFile)) {
-    exchange = Exchange.fromJSON(JSON.parse(fs.readFileSync(dataFile, 'utf8')), game.config);
-    console.log(`Loaded saved state from ${dataFile}`);
+  const source = dataFile && [dataFile, ...(platform.importFrom ?? [])].find((f) => fs.existsSync(f));
+  if (source) {
+    exchange = Exchange.fromJSON(JSON.parse(fs.readFileSync(source, 'utf8')), platform.config);
+    console.log(source === dataFile ? `Loaded saved state from ${dataFile}` : `Imported ${source} (saving to ${dataFile} from now on)`);
   } else {
-    exchange = new Exchange(game.config);
-    game.setup?.(exchange);
+    exchange = new Exchange(platform.config);
   }
-  // also runs on saved games, so names added to the list later get accounts
-  for (const name of game.accounts ?? []) exchange.ensureAccount(name);
+  // also runs on saved state, so names added to the list later get accounts
+  for (const name of platform.accounts ?? []) exchange.ensureAccount(name);
   return exchange;
 }
 
@@ -266,15 +301,15 @@ function safeEqual(a, b) {
   return timingSafeEqual(h(a), h(b));
 }
 
-function printBanner(game, port, adminPassword, dataFile) {
+function printBanner(platform, port, adminPassword, dataFile) {
   const lan = Object.values(os.networkInterfaces())
     .flat()
     .filter((i) => i && i.family === 'IPv4' && !i.internal)
     .map((i) => `http://${i.address}:${port}`);
-  console.log(`\n  ${game.title}`);
+  console.log(`\n  ${platform.title}`);
   console.log(`  On this computer:  http://localhost:${port}          admin: http://localhost:${port}/admin`);
   for (const url of lan) console.log(`  Same Wi-Fi:         ${url}     admin: ${url}/admin`);
-  const admins = game.admins?.length ? `, also the password for ${game.admins.join(', ')}` : '';
+  const admins = platform.admins?.length ? `, also the password for ${platform.admins.join(', ')}` : '';
   console.log(`  Admin password: ${process.env.ADMIN_PASSWORD ? '(from ADMIN_PASSWORD in .env)' : `${adminPassword} (random; put ADMIN_PASSWORD in .env to choose one)`}${admins}`);
   console.log(`  Saving to: ${dataFile || '(not persisted)'}\n`);
 }

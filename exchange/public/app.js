@@ -46,7 +46,7 @@
 
   // ------------------------------------------------------------------ state + socket
 
-  const store = { game: null, state: null, me: null, isAdmin: false, adminState: null };
+  const store = { platform: null, state: null, me: null, isAdmin: false, adminState: null, view: 'trade', history: null };
   const socket = io({ autoConnect: false });
   let keys = null;
 
@@ -235,8 +235,33 @@
       renderLeaderboard();
       renderWagers();
       renderTape();
-      for (const p of adminPanels) if (p.el) p.update?.(store.state, store.me);
+      renderSession();
+      for (const p of adminPanels) {
+        if (!p.el) continue;
+        p.el.hidden = !!p.gameId && p.gameId !== store.state.session?.gameId; // game panels only during their session
+        if (!p.el.hidden) p.update?.(store.state, store.me);
+      }
+      if (store.view === 'history') historyTimer ??= setTimeout(() => {
+        historyTimer = null;
+        loadHistory();
+      }, 1000);
     });
+  }
+  let historyTimer = null;
+
+  const currentGame = () => store.platform?.games.find((g) => g.id === store.state?.session?.gameId);
+
+  function renderSession() {
+    const session = store.state.session;
+    const game = currentGame();
+    $('#session-badge').hidden = !session;
+    if (session) $('#session-badge').textContent = `● ${session.name} · ${game?.title ?? session.gameId}`;
+    $('#rules').textContent = game?.rules ?? '';
+    $('#rules-btn').hidden = !game?.rules;
+    if (!game?.rules) $('#rules').hidden = true;
+    $('#markets-empty').textContent = session
+      ? 'No markets yet. Waiting for the admin to list some.'
+      : 'No session is running right now. Your chips, trades and P&L from past sessions are under History.';
   }
 
   const bankrollMode = () => store.state?.config.startingBankroll != null;
@@ -251,9 +276,11 @@
       h('b', {}, me.name),
       ...(bankrollMode()
         ? [
-            stat('chips', fmtMoney(me.cash), '', 'Chips in your account'),
-            stat('equity', fmtMoney(me.equity), '', 'Chips plus open positions at their mark'),
-            stat('P&L', fmtPnl(me.pnl), sign(me.pnl), 'Equity minus starting chips and admin adjustments'),
+            stat('chips', fmtMoney(me.cash), '', 'Game-night chips: what you trade with'),
+            me.quiz ? stat('quiz', fmtMoney(me.quiz), '', 'Quiz points (count toward equity, not tradeable)') : '',
+            stat('equity', fmtMoney(me.equity), '', 'Game-night equity (chips plus open positions) plus quiz points'),
+            me.sessionPnl !== null ? stat('session P&L', fmtPnl(me.sessionPnl), sign(me.sessionPnl), 'Your P&L in tonight\'s session') : '',
+            stat('all-time', fmtPnl(me.pnl), sign(me.pnl), 'All-time P&L: equity minus starting chips and admin adjustments'),
             stat('available', fmtMoney(me.available), '', 'What you can still risk: chips minus the worst-case loss of your positions and orders'),
           ]
         : [stat('P&L', fmtPnl(me.pnl), sign(me.pnl))]),
@@ -315,7 +342,13 @@
     sec.summary = h('span', { class: 'group-summary muted' });
     sec.halt = h('button', { type: 'button', class: 'small', onclick: (e) => { e.preventDefault(); admin('halt', { groupId: g.id }); } }, 'Halt all');
     sec.resume = h('button', { type: 'button', class: 'small', onclick: (e) => { e.preventDefault(); admin('resume', { groupId: g.id }); } }, 'Resume all');
-    sec.adminBar = h('span', { class: 'group-admin' }, sec.halt, sec.resume);
+    sec.del = h('button', { type: 'button', class: 'small danger', onclick: (e) => {
+      e.preventDefault();
+      const traded = g.markets.reduce((n, m) => n + m.volume, 0);
+      const warn = traded ? ` All its trades will be cancelled and everyone's chips restored.` : '';
+      if (confirm(`Delete ${g.name}?${warn}`)) admin('deleteMarket', { groupId: g.id });
+    } }, 'Delete');
+    sec.adminBar = h('span', { class: 'group-admin' }, sec.halt, sec.resume, sec.del);
     sec.grid = h('div', { class: 'grid' });
     sec.root = h('details', { class: 'group', open: true }, h('summary', {}, sec.title, sec.summary, sec.adminBar), sec.grid);
     sec.wasDone = false;
@@ -332,7 +365,7 @@
     sec.root.classList.toggle('done', isDone);
     if (isDone && !sec.wasDone) sec.root.open = false; // collapse finished groups once
     sec.wasDone = isDone;
-    sec.adminBar.hidden = !store.isAdmin || !g.isGroup || isDone;
+    sec.adminBar.hidden = !store.isAdmin || !g.isGroup;
     sec.halt.hidden = !g.markets.some((m) => m.status === 'open');
     sec.resume.hidden = !halted;
   }
@@ -379,7 +412,9 @@
       if (confirm(`Settle ${marketLabel(market())} at ${c.adminPx.value}? This cannot be undone.`)) admin('settle', { marketId: m.id, price: Number(c.adminPx.value) });
     } }, 'Settle');
     c.adminDelete = h('button', { type: 'button', class: 'small danger', onclick: () => {
-      if (confirm(`Delete ${marketLabel(market())}?`)) admin('deleteMarket', { marketId: m.id });
+      const mk = market();
+      const warn = mk?.volume ? ` Its trades (${mk.volume} contracts) will be cancelled and everyone's chips restored.` : '';
+      if (confirm(`Delete ${marketLabel(mk)}?${warn}`)) admin('deleteMarket', { marketId: m.id });
     } }, 'Delete');
     c.admin = h('div', { class: 'card-admin' }, c.adminHalt, c.adminPx, c.adminSettle, c.adminDelete);
 
@@ -423,9 +458,11 @@
     c.bid.disabled = !open;
     c.ask.disabled = !open;
 
-    c.admin.hidden = !store.isAdmin || settled;
+    c.admin.hidden = !store.isAdmin;
     c.adminHalt.textContent = m.status === 'halted' ? 'Resume' : 'Halt';
-    c.adminDelete.hidden = m.volume > 0;
+    c.adminHalt.hidden = settled;
+    c.adminPx.hidden = settled;
+    c.adminSettle.hidden = settled;
   }
 
   function renderLadder(c, m, myOrders) {
@@ -507,17 +544,19 @@
 
   function renderLeaderboard() {
     const withEquity = bankrollMode();
+    const withSession = !!store.state.session;
     const rows = store.state.leaderboard.map((u, i) =>
       h(
         'tr',
         { class: u.name === store.me?.name ? 'me' : '' },
         h('td', { class: 'num muted' }, i + 1),
         h('td', {}, u.name),
-        withEquity ? h('td', { class: 'num' }, fmtMoney(u.equity)) : '',
+        withEquity ? h('td', { class: 'num', title: `game night ${fmtMoney(u.gameEquity)} + quiz ${fmtMoney(u.quiz)}` }, fmtMoney(u.equity)) : '',
+        withSession ? h('td', { class: `num ${sign(u.sessionPnl)}` }, fmtPnl(u.sessionPnl)) : '',
         h('td', { class: `num ${sign(u.pnl)}` }, fmtPnl(u.pnl)),
       ),
     );
-    const head = withEquity ? ['#', 'trader', 'equity', 'P&L'] : ['#', 'trader', 'P&L'];
+    const head = ['#', 'trader', ...(withEquity ? ['equity'] : []), ...(withSession ? ['session'] : []), 'all-time'];
     $('#leaderboard').replaceChildren(table(head, rows, 'Nobody has joined yet.'));
   }
 
@@ -541,6 +580,86 @@
       table(['date', 'for', '$', ''], rows, ''),
     );
   }
+
+  // ---- History tab: chips, plus every session's results and trades (fetched on demand)
+
+  let historyPending = false;
+  let historyAgain = false;
+  async function loadHistory() {
+    if (!store.me) {
+      $('#history').replaceChildren(h('div', { class: 'empty' }, 'Sign in to see your chips, trades and P&L from every session.'));
+      return;
+    }
+    if (historyPending) {
+      historyAgain = true;
+      return;
+    }
+    historyPending = true;
+    const res = await call('history');
+    historyPending = false;
+    if (res.ok) renderHistory(res);
+    if (historyAgain) {
+      historyAgain = false;
+      setTimeout(loadHistory, 500);
+    }
+  }
+
+  function renderHistory(hist) {
+    const open = new Set([...document.querySelectorAll('#history details[open]')].map((d) => d.dataset.id));
+    const first = !$('#history').childElementCount || !$('#history details');
+    const gameTitle = (id) => store.platform.games.find((g) => g.id === id)?.title ?? id;
+    const stat = (label, value, cls = '') => h('span', { class: 'stat' }, label, h('b', { class: cls }, value));
+    const sessions = hist.sessions.map((s, i) => {
+      const tradeCount = s.trades.length;
+      const trades = [...s.trades].reverse().map((t) =>
+        h('tr', {},
+          h('td', { class: 'muted' }, fmtTime(t.ts)),
+          h('td', {}, t.market),
+          h('td', { class: t.side === 'buy' ? 'up' : 'down' }, t.side === 'buy' ? 'bought' : 'sold'),
+          h('td', { class: 'num' }, t.qty),
+          h('td', { class: 'num' }, t.price)));
+      const results = s.results.map((r) =>
+        h('tr', {},
+          h('td', {}, r.market),
+          h('td', { class: 'muted' }, r.status === 'settled' ? `settled ${r.settlement}` : r.status === 'recorded' ? 'points' : r.status),
+          h('td', { class: `num ${sign(r.position)}` }, r.status === 'recorded' ? '' : r.position ? fmtPos(r.position) : '0'),
+          h('td', { class: `num ${sign(r.pnl)}` }, fmtPnl(r.pnl))));
+      const board = s.leaderboard.map((u, j) =>
+        h('tr', { class: u.name === hist.name ? 'me' : '' },
+          h('td', { class: 'num muted' }, j + 1), h('td', {}, u.name), h('td', { class: `num ${sign(u.pnl)}` }, fmtPnl(u.pnl))));
+      const live = s.status === 'active';
+      return h('details', { class: 'session', 'data-id': s.id, open: open.has(s.id) || (first && i === 0) },
+        h('summary', {},
+          h('span', { class: 'name' }, s.name),
+          h('span', { class: `badge ${live ? 'live' : 'ended'}` }, live ? 'live' : 'ended'),
+          h('span', { class: 'muted' }, `${s.gameTitle || gameTitle(s.gameId)} · ${new Date(s.startedAt).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}`),
+          h('span', {}, 'your P&L ', h('b', { class: sign(s.pnl) }, fmtPnl(s.pnl))),
+          tradeCount ? h('span', { class: 'muted' }, `${tradeCount} trade${tradeCount === 1 ? '' : 's'}`) : ''),
+        h('div', { class: 'cols' },
+          h('div', {}, h('h4', {}, 'Your results'), table(['market', 'result', 'pos', 'P&L'], results, 'You did not trade in this session.')),
+          h('div', {}, h('h4', {}, 'Session leaderboard'), table(['#', 'trader', 'P&L'], board, 'No trades in this session.'))),
+        s.gameId === 'external' ? '' : h('div', { class: 'scroll-x' }, h('h4', {}, 'Your trades'), table(['time', 'market', 'side', 'qty', 'px'], trades, 'No trades.')));
+    });
+    $('#history').replaceChildren(
+      h('div', { class: 'panel history-summary' },
+        h('b', {}, hist.name),
+        stat('game-night chips', fmtMoney(hist.cash)),
+        stat('game-night equity', fmtMoney(hist.gameEquity)),
+        stat('quiz', fmtMoney(hist.quiz)),
+        stat('total equity', fmtMoney(hist.equity)),
+        stat('all-time P&L', fmtPnl(hist.pnl), sign(hist.pnl))),
+      ...(sessions.length ? sessions : [h('div', { class: 'empty' }, 'No sessions yet.')]),
+    );
+  }
+
+  function setView(view) {
+    store.view = view;
+    for (const tab of document.querySelectorAll('.tab')) tab.classList.toggle('active', tab.dataset.view === view);
+    $('#view-trade').hidden = view !== 'trade';
+    $('#view-history').hidden = view !== 'history';
+    if (view === 'history') loadHistory();
+  }
+  for (const tab of document.querySelectorAll('.tab')) tab.addEventListener('click', () => setView(tab.dataset.view));
 
   function renderTape() {
     const mineIds = new Set(store.me?.trades.map((t) => t.id));
@@ -629,6 +748,41 @@
     render();
   }
 
+  // Core admin panel: start and end game-night sessions.
+  registerAdminPanel({
+    title: 'Session',
+    order: -1, // first
+    mount(el) {
+      const today = new Date().toLocaleDateString([], { month: 'short', day: 'numeric' });
+      const name = h('input', { placeholder: `Game night ${today}` });
+      const game = h('select', { required: true }, store.platform.games.map((g) => h('option', { value: g.id }, g.title)));
+      this.start = h('form', { class: 'inline', onsubmit: async (e) => {
+        e.preventDefault();
+        const res = await admin('startSession', { name: name.value || `Game night ${today}`, gameId: game.value });
+        if (res.ok) {
+          toast('Session started');
+          name.value = '';
+        }
+      } }, name, game, h('button', { type: 'submit', class: 'primary' }, 'Start session'));
+      this.liveText = h('span', {});
+      this.live = h('div', { class: 'session-live' }, this.liveText, h('button', { type: 'button', class: 'small', onclick: async () => {
+        if (!confirm('End this session? Open orders are cancelled and it moves to History. Settle or delete any match people still hold positions in first.')) return;
+        const res = await admin('endSession');
+        if (res.ok) toast('Session ended and saved to History');
+      } }, 'End session'));
+      el.append(this.start, this.live);
+    },
+    update(state) {
+      const session = state.session;
+      this.start.hidden = !!session;
+      this.live.hidden = !session;
+      if (session) {
+        const game = currentGame();
+        this.liveText.replaceChildren(h('b', {}, session.name), ` · ${game?.title ?? session.gameId} · started ${fmtTime(session.startedAt)}`);
+      }
+    },
+  });
+
   // Core admin panel: accounts, chips and password resets.
   registerAdminPanel({
     title: 'Accounts',
@@ -641,7 +795,7 @@
         h('div', { class: 'scroll-x' }, h(
           'table',
           { class: 'list accounts' },
-          h('thead', {}, h('tr', {}, ['', 'name', 'password', 'chips', 'equity', 'P&L', 'wagers $', 'set chips', ''].map((t) => h('th', {}, t)))),
+          h('thead', {}, h('tr', {}, ['', 'name', 'password', 'game chips ✎', 'game equity', 'quiz ✎', 'total equity', 'game P&L', 'wagers $ ✎', ''].map((t) => h('th', {}, t)))),
           this.body,
         )),
         h('form', { class: 'inline', onsubmit: async (e) => {
@@ -669,12 +823,17 @@
         row.dot.className = `dot ${a.online ? 'on' : ''}`;
         row.dot.title = a.online ? 'Online' : 'Offline';
         row.pw.textContent = a.hasPassword ? 'set' : 'not yet';
-        row.cash.textContent = fmtMoney(a.cash);
+        if (!row.cash.editing) row.cash.textContent = fmtMoney(a.cash);
+        row.gameEquity.textContent = fmtMoney(a.gameEquity);
+        if (!row.quiz.editing) row.quiz.textContent = fmtMoney(a.quiz);
         row.equity.textContent = fmtMoney(a.equity);
         row.pnl.textContent = fmtPnl(a.pnl);
         row.pnl.className = `num ${sign(a.pnl)}`;
-        row.wager.textContent = a.wagerBalance ? fmtUsd(a.wagerBalance) : '–';
-        row.wager.className = `num ${sign(a.wagerBalance)}`;
+        if (!row.wager.editing) {
+          row.wager.textContent = a.wagerBalance ? fmtUsd(a.wagerBalance) : '–';
+          row.wager.className = `num editable ${sign(a.wagerBalance)}`;
+        }
+        row.account = a;
         row.reset.disabled = !a.hasPassword || a.admin;
         row.reset.title = a.admin ? 'Admin account: its password is ADMIN_PASSWORD' : '';
       });
@@ -682,31 +841,59 @@
   });
 
   function accountRow(a) {
-    const r = {};
+    const r = { account: a };
     r.dot = h('span', { class: 'dot' });
     r.pw = h('td', { class: 'muted' });
-    r.cash = h('td', { class: 'num' });
-    r.equity = h('td', { class: 'num' });
+    r.cash = editableCell('Click to set game-night chips', () => r.account.cash, async (value) => {
+      const res = await admin('setBankroll', { userId: a.id, amount: value });
+      if (res.ok) toast(`${a.name} now has ${value} game-night chips`);
+    });
+    r.gameEquity = h('td', { class: 'num' });
+    r.quiz = editableCell('Click to set quiz points', () => r.account.quiz, async (value) => {
+      const res = await admin('setQuiz', { userId: a.id, amount: value });
+      if (res.ok) toast(`${a.name} now has ${value} quiz points`);
+    });
+    r.equity = h('td', { class: 'num total' });
     r.pnl = h('td', { class: 'num' });
-    r.wager = h('td', { class: 'num' });
-    r.input = h('input', { type: 'number', class: 'price', placeholder: 'amount' });
-    const set = async () => {
-      if (r.input.value === '') return toast('Enter the new chip count', 'error');
-      const res = await admin('setBankroll', { userId: a.id, amount: Number(r.input.value) });
-      if (res.ok) {
-        toast(`${a.name} now has ${r.input.value} chips`);
-        r.input.value = '';
-      }
-    };
-    r.input.addEventListener('keydown', (e) => e.key === 'Enter' && set());
+    r.wager = editableCell('Click to set the open wager balance ($)', () => r.account.wagerBalance, async (value) => {
+      const res = await admin('setWagerBalance', { userId: a.id, amount: value });
+      if (res.ok) toast(`${a.name}'s open wagers are now ${fmtUsd(value)}`);
+    });
     r.reset = h('button', { type: 'button', class: 'small', onclick: async () => {
       if (!confirm(`Reset ${a.name}'s password? They will be signed out and choose a new one at their next sign-in.`)) return;
       const res = await admin('resetPassword', { userId: a.id });
       if (res.ok) toast(`${a.name}'s password was reset`);
     } }, 'Reset password');
-    r.root = h('tr', {}, h('td', {}, r.dot), h('td', {}, a.name), r.pw, r.cash, r.equity, r.pnl, r.wager,
-      h('td', { class: 'set-cell' }, r.input, h('button', { type: 'button', class: 'small', onclick: set }, 'Set')), h('td', {}, r.reset));
+    r.root = h('tr', {}, h('td', {}, r.dot), h('td', {}, a.name), r.pw, r.cash, r.gameEquity, r.quiz, r.equity, r.pnl, r.wager, h('td', {}, r.reset));
     return r;
+  }
+
+  /** A table cell that turns into a number input when clicked. Enter saves, Escape or clicking away cancels. */
+  function editableCell(title, current, save) {
+    const td = h('td', { class: 'num editable', title });
+    td.addEventListener('click', () => {
+      if (td.editing) return;
+      td.editing = true;
+      const input = h('input', { type: 'number', step: 'any', value: current() });
+      const done = () => {
+        td.editing = false;
+        render();
+      };
+      input.addEventListener('keydown', async (e) => {
+        if (e.key === 'Escape') return done();
+        if (e.key !== 'Enter') return;
+        if (input.value === '') return toast('Enter a number', 'error');
+        const value = Number(input.value);
+        td.editing = false; // let the update show the saved value
+        await save(value);
+        render();
+      });
+      input.addEventListener('blur', () => td.editing && done());
+      td.replaceChildren(input);
+      input.focus();
+      input.select();
+    });
+    return td;
   }
 
   // Core admin panel: real-money wagers, tracked per account and settled up at the end.
@@ -716,7 +903,7 @@
     mount(el) {
       this.who = h('select', { required: true });
       this.whoKey = '';
-      const amount = h('input', { type: 'number', step: '0.01', class: 'price', placeholder: '$ ±amount', required: true });
+      const amount = h('input', { type: 'number', step: '0.01', class: 'price', placeholder: '$ amount', style: 'width:110px', required: true });
       const note = h('input', { placeholder: 'What for, e.g. Game 3 vs Paul' });
       this.owed = h('div', {});
       this.recent = h('div', { class: 'scroll-x' });
@@ -808,22 +995,27 @@
     get state() { return store.state; },
     get me() { return store.me; },
     get adminState() { return store.adminState; },
-    get game() { return store.game; },
+    get platform() { return store.platform; },
   };
   window.Exchange = api;
 
   async function boot() {
-    store.game = await fetch('/game.json').then((r) => r.json());
-    keys = { token: `xchg:${store.game.id}:token`, admin: `xchg:${store.game.id}:admin`, lastName: `xchg:${store.game.id}:name` };
-    document.title = store.game.title;
-    $('#title').textContent = store.game.title;
-    $('#join-title').textContent = store.game.title;
-    $('#join-rules').textContent = store.game.rules;
-    $('#rules').textContent = store.game.rules;
-    $('#rules-btn').hidden = !store.game.rules;
+    store.platform = await fetch('/platform.json').then((r) => r.json());
+    const ns = `xchg:${store.platform.id}`;
+    keys = { token: `${ns}:token`, admin: `${ns}:admin`, lastName: `${ns}:name` };
+    // keep people signed in from before the platform was renamed
+    for (const k of ['token', 'name']) {
+      const old = storage.get(`xchg:smash:${k}`);
+      if (old && !storage.get(`${ns}:${k}`)) storage.set(`${ns}:${k}`, old);
+    }
+    document.title = store.platform.title;
+    $('#title').textContent = store.platform.title;
+    $('#join-title').textContent = store.platform.title;
+    $('#join-rules').textContent = 'Sign in to trade, and to see your chips, trades and P&L from every session.';
+    $('#rules-btn').hidden = true;
     renderAdminLogin();
     if (isAdminPage) $('#admin').hidden = false;
-    for (const src of store.game.scripts) document.body.append(h('script', { src }));
+    for (const src of store.platform.scripts) document.body.append(h('script', { src }));
     socket.connect();
   }
 

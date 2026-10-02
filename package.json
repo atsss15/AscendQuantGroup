@@ -5,10 +5,9 @@
   "description": "Trading games and tools for Emory Ascend Quant Group",
   "type": "module",
   "scripts": {
-    "start": "node --env-file-if-exists=.env games/smash/server.js",
-    "smash": "node --env-file-if-exists=.env games/smash/server.js",
-    "dev": "node --env-file-if-exists=.env --watch games/smash/server.js",
-    "share": "SHARE=1 node --env-file-if-exists=.env games/smash/server.js",
+    "start": "node --env-file-if-exists=.env server.js",
+    "dev": "node --env-file-if-exists=.env --watch server.js",
+    "share": "SHARE=1 node --env-file-if-exists=.env server.js",
     "test": "node --test"
   },
   "engines": {

@@ -79,8 +79,9 @@ input[type='number'] { font-variant-numeric: tabular-nums; }
   padding: 10px 16px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
 }
-.brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 16px; }
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 16px; white-space: nowrap; }
 .conn { width: 8px; height: 8px; border-radius: 50%; background: var(--red); }
 .conn.on { background: var(--green); }
 #me-summary { margin-left: auto; display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; justify-content: flex-end; }
@@ -204,3 +205,33 @@ table.list tr.me td { background: rgba(88, 166, 255, 0.08); }
 .toast.sell { border-left-color: var(--red); }
 .toast.error { border-left-color: var(--red); color: #ffb3ad; }
 .toast.out { opacity: 0; }
+
+/* ---------- tabs, sessions, history */
+
+.tabs { display: flex; gap: 4px; }
+.tab { background: transparent; border-color: transparent; color: var(--muted); }
+.tab.active { background: var(--panel-2); border-color: var(--border); color: var(--text); }
+.session-badge { white-space: nowrap; font-size: 12px; font-weight: 500; color: var(--green); background: var(--green-bg); padding: 2px 8px; border-radius: 999px; }
+
+.history { padding: 16px; display: grid; gap: 12px; max-width: 1100px; }
+.history-summary { display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: baseline; }
+.history-summary .stat { color: var(--muted); }
+.history-summary .stat b { font-size: 20px; color: var(--text); font-variant-numeric: tabular-nums; margin-left: 4px; }
+.history-summary .stat b.up { color: var(--green); }
+.history-summary .stat b.down { color: var(--red); }
+.session { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; }
+.session > summary { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; cursor: pointer; list-style: none; }
+.session > summary::-webkit-details-marker { display: none; }
+.session > summary .name { font-weight: 700; font-size: 15px; }
+.session .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 10px; }
+.session h4 { margin: 0 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+.badge.live { background: var(--green-bg); color: var(--green); }
+.badge.ended { background: var(--panel-2); color: var(--muted); }
+.badge.closed { background: var(--panel-2); color: var(--muted); }
+
+/* click-to-edit cells in the admin accounts table */
+td.editable { cursor: pointer; }
+td.editable:hover { background: rgba(88, 166, 255, 0.12); outline: 1px dashed var(--accent); }
+td.editable input { width: 90px; padding: 2px 6px; text-align: right; }
+.session-live { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+table.accounts td.total { font-weight: 700; }

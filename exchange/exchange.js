@@ -13,17 +13,20 @@ const DEFAULT_CONFIG = {
   maxPosition: null, // per user per market, counting resting orders as if filled; null = unlimited
   maxOrderQty: 1000,
   anonymousTrades: true, // hide buyer/seller names on the public tape
-  tradeHistory: 2000,
   market: { min: 0, max: 100, tick: 1 }, // defaults for new markets
 };
 
 /**
  * Game-agnostic exchange: accounts, markets, order matching, bankrolls, settlement.
  *
- * Each account has `cash` (its bankroll) that trades move directly: buying costs price × qty,
+ * Each account has `cash` (its game-night chips) that trades move directly: buying costs price × qty,
  * selling receives it, and settlement pays position × settlement price. Equity = cash + position × mark.
  * `deposits` is the starting bankroll plus admin adjustments, so P&L = equity − deposits.
  * `flows[marketId]` tracks cash per market for per-market P&L.
+ * `quiz` is a separate points balance (from quizzes) that counts toward total equity but can't be traded.
+ *
+ * Markets belong to a session (one game night running one game). Only one session is active at a time;
+ * ended sessions stay as history. Accounts, chips and wagers span all sessions.
  *
  * Separately, `wagers` is a real-money ledger (dollars, not chips) the admin records per account,
  * e.g. side bets on a game. Unpaid entries add up to what each person is owed / owes when settling up.
@@ -39,6 +42,8 @@ export class Exchange extends EventEmitter {
     this.orders = new Map(); // resting orders only
     this.trades = [];
     this.wagers = []; // { id, userId, amount, note, paid, ts }
+    this.sessions = new Map(); // id -> { id, name, gameId, status: 'active'|'ended', startedAt, endedAt }
+    this.activeSessionId = null;
     this.seq = 0;
   }
 
@@ -76,6 +81,7 @@ export class Exchange extends EventEmitter {
       token: randomUUID(),
       cash: starting,
       deposits: starting,
+      quiz: 0,
       positions: {},
       flows: {},
       createdAt: Date.now(),
@@ -138,6 +144,15 @@ export class Exchange extends EventEmitter {
     this.changed();
   }
 
+  /** Admin: set an account's quiz points. */
+  setQuiz(userId, amount) {
+    const user = this.getUser(userId);
+    amount = amount === '' || amount == null ? NaN : Number(amount);
+    if (!Number.isFinite(amount)) throw new ExchangeError('Quiz points must be a number');
+    user.quiz = amount;
+    this.changed();
+  }
+
   // ---------------------------------------------------------------- dollar wagers
 
   /** Record a real-money result for an account: positive = they're owed, negative = they owe. */
@@ -149,6 +164,15 @@ export class Exchange extends EventEmitter {
     this.wagers.push(entry);
     this.changed();
     return entry;
+  }
+
+  /** Admin: make an account's open wager balance equal `amount` by recording the difference as an adjustment. */
+  setWagerBalance(userId, amount) {
+    const user = this.getUser(userId);
+    const target = amount === '' || amount == null ? NaN : Math.round(Number(amount) * 100) / 100;
+    if (!Number.isFinite(target)) throw new ExchangeError('Enter a dollar amount');
+    const diff = Math.round((target - this.wagerBalance(user)) * 100) / 100;
+    if (diff !== 0) this.addWager(user.id, diff, 'Adjusted by admin');
   }
 
   deleteWager(wagerId) {
@@ -179,6 +203,125 @@ export class Exchange extends EventEmitter {
     return { id: w.id, userId: w.userId, name: this.users.get(w.userId)?.name, amount: w.amount, note: w.note, paid: w.paid, ts: w.ts };
   }
 
+  // ---------------------------------------------------------------- sessions
+
+  activeSession() {
+    return this.activeSessionId ? this.sessions.get(this.activeSessionId) : null;
+  }
+
+  startSession({ name, gameId } = {}) {
+    if (this.activeSession()) throw new ExchangeError(`"${this.activeSession().name}" is still running; end it first`);
+    if (!gameId) throw new ExchangeError('Pick a game for the session');
+    const clean = String(name ?? '').trim().slice(0, 60) || `Session ${this.sessions.size + 1}`;
+    const session = { id: this.nextId('s'), name: clean, gameId: String(gameId), status: 'active', startedAt: Date.now(), endedAt: null };
+    this.sessions.set(session.id, session);
+    this.activeSessionId = session.id;
+    this.changed();
+    return session;
+  }
+
+  /**
+   * End the active session. Resting orders are cancelled and markets that are still open become 'closed'.
+   * Refuses while anyone still holds a position in an unsettled market, since that needs a settlement price.
+   */
+  endSession() {
+    const session = this.activeSession();
+    if (!session) throw new ExchangeError('No session is running');
+    const markets = this.sessionMarkets(session.id).filter((m) => m.status !== 'settled');
+    const held = markets.filter((m) => [...this.users.values()].some((u) => u.positions[m.id]));
+    if (held.length) {
+      throw new ExchangeError(`Settle or delete these first, people still hold positions: ${held.map((m) => marketLabel(m)).join(', ')}`);
+    }
+    for (const m of markets) {
+      if (m.volume === 0) this.deleteMarket(m.id);
+      else {
+        this.clearBook(m);
+        m.status = 'closed';
+      }
+    }
+    session.status = 'ended';
+    session.endedAt = Date.now();
+    this.activeSessionId = null;
+    if (!this.sessionMarkets(session.id).length) this.sessions.delete(session.id); // nothing happened, nothing to keep
+    this.changed();
+    return session;
+  }
+
+  sessionMarkets(sessionId) {
+    return [...this.markets.values()].filter((m) => m.sessionId === sessionId);
+  }
+
+  /** A user's P&L from one session's markets: cash flows plus open positions at their mark. */
+  sessionPnl(user, sessionId) {
+    let total = 0;
+    for (const r of this.sessions.get(sessionId)?.results ?? []) if (r.userId === user.id) total += r.amount;
+    for (const m of this.sessionMarkets(sessionId)) {
+      total += (user.flows[m.id] ?? 0) + (user.positions[m.id] ?? 0) * (this.mark(m) ?? 0);
+    }
+    return total;
+  }
+
+  /**
+   * Add an ended session for a game played outside the exchange (e.g. poker), from a date and a note.
+   * Results are added with recordResult.
+   */
+  createPastSession({ name, date, gameTitle = '' } = {}) {
+    const clean = String(name ?? '').trim().slice(0, 60);
+    if (!clean) throw new ExchangeError('Session needs a name');
+    const startedAt = date ? new Date(date).getTime() : Date.now();
+    if (!Number.isFinite(startedAt)) throw new ExchangeError('Invalid date');
+    const session = { id: this.nextId('s'), name: clean, gameId: 'external', gameTitle: String(gameTitle).slice(0, 60), status: 'ended', startedAt, endedAt: startedAt, results: [] };
+    this.sessions.set(session.id, session);
+    this.changed();
+    return session;
+  }
+
+  /** Record a points result in a session: it lands in the player's game-night chips and counts as P&L. */
+  recordResult(sessionId, userId, amount, note = '') {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new ExchangeError('Unknown session');
+    const user = this.getUser(userId);
+    amount = amount === '' || amount == null ? NaN : Number(amount);
+    if (!Number.isFinite(amount)) throw new ExchangeError('Result must be a number');
+    session.results ??= [];
+    session.results.push({ userId: user.id, amount, note: String(note ?? '').slice(0, 60), ts: Date.now() });
+    user.cash += amount;
+    this.changed();
+  }
+
+  /** Sessions newest first. */
+  sessionsByDate() {
+    const list = [...this.sessions.values()];
+    return list.map((s, i) => [s, i]).sort(([a, i], [b, j]) => b.startedAt - a.startedAt || j - i).map(([s]) => s);
+  }
+
+  /** Every session with this user's results, trades, and the session leaderboard. Newest first. */
+  history(userId) {
+    const user = this.getUser(userId);
+    const sessions = this.sessionsByDate().map((session) => {
+      const markets = this.sessionMarkets(session.id);
+      const ids = new Set(markets.map((m) => m.id));
+      const trades = this.trades
+        .filter((t) => ids.has(t.marketId) && (t.buyerId === user.id || t.sellerId === user.id))
+        .map((t) => ({ ...this.tradeView(t), side: t.buyerId === user.id ? 'buy' : 'sell', market: marketLabel(this.markets.get(t.marketId)) }));
+      const results = markets
+        .filter((m) => user.flows[m.id] !== undefined || user.positions[m.id])
+        .map((m) => {
+          const position = user.positions[m.id] ?? 0;
+          return { market: marketLabel(m), status: m.status, settlement: m.settlement, position, pnl: (user.flows[m.id] ?? 0) + position * (this.mark(m) ?? 0) };
+        });
+      for (const r of session.results ?? []) {
+        if (r.userId === user.id) results.push({ market: r.note || 'Result', status: 'recorded', settlement: null, position: 0, pnl: r.amount });
+      }
+      const leaderboard = [...this.users.values()]
+        .map((u) => ({ name: u.name, pnl: this.sessionPnl(u, session.id) }))
+        .filter((r) => r.pnl !== 0 || r.name === user.name)
+        .sort((a, b) => b.pnl - a.pnl);
+      return { ...session, markets: markets.length, pnl: this.sessionPnl(user, session.id), trades, results, leaderboard };
+    });
+    return { name: user.name, cash: user.cash, quiz: user.quiz ?? 0, gameEquity: this.gameEquity(user), equity: this.equity(user), pnl: this.pnl(user), sessions };
+  }
+
   // ---------------------------------------------------------------- markets
 
   /**
@@ -189,6 +332,8 @@ export class Exchange extends EventEmitter {
    * @param {object} [spec.meta]                                free-form data for the game
    */
   createMarket({ name, group = null, description = '', min, max, tick, meta = {} } = {}) {
+    const session = this.activeSession();
+    if (!session) throw new ExchangeError('Start a session first');
     const clean = String(name ?? '').trim().slice(0, 60);
     if (!clean) throw new ExchangeError('Market needs a name');
     const spec = { ...this.config.market };
@@ -206,6 +351,7 @@ export class Exchange extends EventEmitter {
     if (typeof group === 'string') group = group.trim() ? { id: `g:${group.trim()}`, name: group.trim() } : null;
     const market = {
       id: this.nextId('m'),
+      sessionId: session.id,
       name: clean,
       group: group ? { id: String(group.id), name: String(group.name).slice(0, 60) } : null,
       description: String(description ?? '').slice(0, 300),
@@ -213,7 +359,7 @@ export class Exchange extends EventEmitter {
       max: spec.max,
       tick: spec.tick,
       meta,
-      status: 'open', // open | halted | settled
+      status: 'open', // open | halted | settled | closed (session ended without settling)
       settlement: null,
       lastPrice: null,
       volume: 0,
@@ -239,7 +385,7 @@ export class Exchange extends EventEmitter {
   setStatus(marketId, status) {
     const market = this.getMarket(marketId);
     if (status !== 'open' && status !== 'halted') throw new ExchangeError('Status must be open or halted');
-    if (market.status === 'settled') throw new ExchangeError(`${market.name} is already settled`);
+    if (market.status === 'settled' || market.status === 'closed') throw new ExchangeError(`${market.name} is already ${market.status}`);
     market.status = status;
     this.changed();
   }
@@ -247,7 +393,7 @@ export class Exchange extends EventEmitter {
   /** Cancel all orders, pay out every position at `price`, and close the market for good. */
   settleMarket(marketId, price) {
     const market = this.getMarket(marketId);
-    if (market.status === 'settled') throw new ExchangeError(`${market.name} is already settled`);
+    if (market.status === 'settled' || market.status === 'closed') throw new ExchangeError(`${market.name} is already ${market.status}`);
     price = Number(price);
     if (!Number.isFinite(price) || price < market.min || price > market.max) {
       throw new ExchangeError(`Settlement price must be between ${market.min} and ${market.max}`);
@@ -267,13 +413,23 @@ export class Exchange extends EventEmitter {
     this.changed();
   }
 
-  /** Remove a market that never traded (e.g. created by mistake). */
+  /**
+   * Delete a market at any time, as if it never existed: resting orders are cancelled, and every trade
+   * (and settlement payout) in it is reversed, so everyone's chips go back to what they were.
+   */
   deleteMarket(marketId) {
     const market = this.getMarket(marketId);
-    if (market.volume > 0) throw new ExchangeError(`${market.name} has traded; settle it instead`);
     this.clearBook(market);
+    for (const user of this.users.values()) {
+      if (user.flows[market.id] !== undefined) user.cash -= user.flows[market.id];
+      delete user.flows[market.id];
+      delete user.positions[market.id];
+    }
+    const cancelled = this.trades.filter((t) => t.marketId === market.id).length;
+    this.trades = this.trades.filter((t) => t.marketId !== market.id);
     this.markets.delete(market.id);
     this.changed();
+    return { cancelledTrades: cancelled };
   }
 
   clearBook(market) {
@@ -393,6 +549,7 @@ export class Exchange extends EventEmitter {
     market.volume += qty;
     const trade = {
       id: this.nextId('t'),
+      sessionId: market.sessionId,
       marketId: market.id,
       price,
       qty,
@@ -401,8 +558,7 @@ export class Exchange extends EventEmitter {
       sellerId: sell.userId,
       ts: Date.now(),
     };
-    this.trades.push(trade);
-    if (this.trades.length > this.config.tradeHistory) this.trades.splice(0, this.trades.length - this.config.tradeHistory);
+    this.trades.push(trade); // kept forever: it's the session history
     return trade;
   }
 
@@ -445,6 +601,7 @@ export class Exchange extends EventEmitter {
   /** Mark price for P&L: settlement if settled, else last trade clamped to the current bid/ask. */
   mark(market) {
     if (market.status === 'settled') return market.settlement;
+    if (market.status === 'closed') return market.lastPrice;
     const bid = market.book.bestBid();
     const ask = market.book.bestAsk();
     let mark = market.lastPrice;
@@ -454,8 +611,13 @@ export class Exchange extends EventEmitter {
     return mark;
   }
 
-  /** Cash plus open positions at their mark. */
+  /** Total equity: game-night equity plus quiz points. */
   equity(user) {
+    return this.gameEquity(user) + (user.quiz ?? 0);
+  }
+
+  /** Game-night equity: chips plus open positions at their mark. */
+  gameEquity(user) {
     let total = user.cash;
     for (const [marketId, pos] of Object.entries(user.positions)) {
       const market = this.markets.get(marketId);
@@ -464,14 +626,15 @@ export class Exchange extends EventEmitter {
     return total;
   }
 
-  /** Trading P&L: equity minus starting bankroll and admin adjustments. */
+  /** Trading P&L: game-night equity minus starting chips and admin adjustments. */
   pnl(user) {
-    return this.equity(user) - user.deposits;
+    return this.gameEquity(user) - user.deposits;
   }
 
   marketView(m) {
     return {
       id: m.id,
+      sessionId: m.sessionId,
       name: m.name,
       group: m.group,
       description: m.description,
@@ -503,13 +666,15 @@ export class Exchange extends EventEmitter {
     return { id: o.id, marketId: o.marketId, side: o.side, price: o.price, qty: o.qty, remaining: o.remaining, tif: o.tif, status: o.status, createdAt: o.createdAt };
   }
 
-  /** Everything every player sees. */
+  /** Everything every player sees: the active session's markets and tape, plus the overall leaderboard. */
   publicState() {
+    const session = this.activeSession();
     return {
-      markets: [...this.markets.values()].map((m) => this.marketView(m)),
-      trades: this.trades.slice(-100).map((t) => this.tradeView(t)),
+      session,
+      markets: session ? this.sessionMarkets(session.id).map((m) => this.marketView(m)) : [],
+      trades: session ? this.trades.filter((t) => t.sessionId === session.id).slice(-100).map((t) => this.tradeView(t)) : [],
       leaderboard: [...this.users.values()]
-        .map((u) => ({ name: u.name, equity: this.equity(u), pnl: this.pnl(u) }))
+        .map((u) => ({ name: u.name, equity: this.equity(u), gameEquity: this.gameEquity(u), quiz: u.quiz ?? 0, pnl: this.pnl(u), sessionPnl: session ? this.sessionPnl(u, session.id) : null }))
         .sort((a, b) => b.equity - a.equity || a.name.localeCompare(b.name)),
       config: {
         maxPosition: this.config.maxPosition,
@@ -520,14 +685,15 @@ export class Exchange extends EventEmitter {
     };
   }
 
-  /** One player's private view: bankroll, positions, open orders, fills. */
+  /** One player's private view: chips, positions and fills in the active session, open orders. */
   userState(userId) {
     const user = this.getUser(userId);
+    const sessionId = this.activeSessionId;
     const marketIds = new Set([...Object.keys(user.flows), ...Object.keys(user.positions)]);
     const positions = [];
     for (const marketId of marketIds) {
       const market = this.markets.get(marketId);
-      if (!market) continue;
+      if (!market || market.sessionId !== sessionId) continue;
       const position = user.positions[marketId] ?? 0;
       const mark = this.mark(market);
       const cashFlow = user.flows[marketId] ?? 0;
@@ -537,15 +703,18 @@ export class Exchange extends EventEmitter {
       id: user.id,
       name: user.name,
       cash: user.cash,
+      quiz: user.quiz ?? 0,
+      gameEquity: this.gameEquity(user),
       equity: this.equity(user),
       pnl: this.pnl(user),
+      sessionPnl: sessionId ? this.sessionPnl(user, sessionId) : null,
       available: this.available(user),
       wagerBalance: this.wagerBalance(user),
       wagers: this.wagers.filter((w) => w.userId === user.id).map((w) => this.wagerView(w)),
       positions,
       orders: [...this.orders.values()].filter((o) => o.userId === user.id).map((o) => this.orderView(o)),
       trades: this.trades
-        .filter((t) => t.buyerId === user.id || t.sellerId === user.id)
+        .filter((t) => t.sessionId === sessionId && (t.buyerId === user.id || t.sellerId === user.id))
         .slice(-100)
         .map((t) => ({ ...this.tradeView(t), side: t.buyerId === user.id ? 'buy' : 'sell' })),
     };
@@ -558,12 +727,15 @@ export class Exchange extends EventEmitter {
         id: u.id,
         name: u.name,
         cash: u.cash,
+        quiz: u.quiz ?? 0,
+        gameEquity: this.gameEquity(u),
         equity: this.equity(u),
         pnl: this.pnl(u),
         wagerBalance: this.wagerBalance(u),
         hasPassword: !!u.password,
       })),
       wagers: this.wagers.map((w) => this.wagerView(w)),
+      sessions: this.sessionsByDate().map(({ results, ...s }) => ({ ...s, markets: this.sessionMarkets(s.id).length })),
     };
   }
 
@@ -571,8 +743,10 @@ export class Exchange extends EventEmitter {
 
   toJSON() {
     return {
-      version: 2,
+      version: 3,
       seq: this.seq,
+      sessions: [...this.sessions.values()],
+      activeSessionId: this.activeSessionId,
       users: [...this.users.values()],
       markets: [...this.markets.values()].map(({ book, ...m }) => ({ ...m, bids: book.bids, asks: book.asks })),
       trades: this.trades,
@@ -586,6 +760,7 @@ export class Exchange extends EventEmitter {
     for (const u of data.users) {
       // version 1 saves had P&L-only accounts
       u.password ??= null;
+      u.quiz ??= 0;
       u.deposits ??= ex.config.startingBankroll ?? 0;
       u.cash ??= u.deposits + Object.values(u.flows).reduce((a, b) => a + b, 0);
       ex.users.set(u.id, u);
@@ -599,8 +774,26 @@ export class Exchange extends EventEmitter {
     }
     ex.trades = data.trades;
     ex.wagers = data.wagers ?? [];
+    for (const session of data.sessions ?? []) ex.sessions.set(session.id, session);
+    ex.activeSessionId = data.activeSessionId ?? null;
+
+    // version 2 saves had no sessions: put those markets in a first session
+    const orphans = [...ex.markets.values()].filter((m) => !m.sessionId);
+    if (orphans.length) {
+      const live = orphans.some((m) => m.status !== 'settled');
+      const startedAt = Math.min(...orphans.map((m) => m.createdAt));
+      const session = { id: ex.nextId('s'), name: 'Session 1', gameId: data.legacyGameId ?? 'smash', status: live ? 'active' : 'ended', startedAt, endedAt: live ? null : Date.now() };
+      ex.sessions.set(session.id, session);
+      if (live) ex.activeSessionId = session.id;
+      for (const m of orphans) m.sessionId = session.id;
+      for (const t of ex.trades) t.sessionId ??= ex.markets.get(t.marketId)?.sessionId ?? null;
+    }
     return ex;
   }
+}
+
+function marketLabel(m) {
+  return m.group ? `${m.group.name} · ${m.name}` : m.name;
 }
 
 function round2(n) {
