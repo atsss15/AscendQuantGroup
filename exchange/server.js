@@ -238,7 +238,7 @@ export function createExchangeServer(platform, opts = {}) {
       httpServer.listen(port, () => {
         const actual = httpServer.address().port;
         if (!opts.quiet) printBanner(platform, actual, adminPassword, dataFile);
-        if (opts.share ?? process.env.SHARE) startTunnel(actual);
+        if (opts.share ?? process.env.SHARE) startTunnel(actual, opts.extraLinks);
         resolve(actual);
       });
     });
@@ -263,7 +263,9 @@ export function createExchangeServer(platform, opts = {}) {
     }
   }
 
-  return { app, io, httpServer, exchange, listen, close, save };
+  const isAdminPassword = (password) => safeEqual(password, adminPassword);
+
+  return { app, io, httpServer, exchange, listen, close, save, isAdminPassword };
 }
 
 /** Register a socket event whose handler result (or error) goes back through the ack callback. */
@@ -315,7 +317,7 @@ function printBanner(platform, port, adminPassword, dataFile) {
 }
 
 /** Expose the server publicly through a Cloudflare quick tunnel and print the links to share. */
-function startTunnel(port) {
+function startTunnel(port, extraLinks = []) {
   console.log('  Starting public tunnel…');
   const child = spawn('cloudflared', ['tunnel', '--no-autoupdate', '--url', `http://localhost:${port}`]);
   let shown = false;
@@ -326,6 +328,7 @@ function startTunnel(port) {
     console.log('\n  ================ Share these links ================');
     console.log(`  Players:  ${url}`);
     console.log(`  Admin:    ${url}/admin`);
+    for (const [label, suffix] of extraLinks) console.log(`  ${label.padEnd(9)} ${url}${suffix}`);
     console.log('  (valid while this terminal stays open)\n');
   };
   child.stdout.on('data', scan);

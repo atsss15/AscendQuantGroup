@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { createExchangeServer } from './exchange/index.js';
+import { attachRanking } from './ranking/server.js';
 import { smash } from './games/smash/game.js';
 
 /**
@@ -23,7 +24,15 @@ export const platform = {
 };
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  createExchangeServer(platform)
+  const server = createExchangeServer(platform, {
+    extraLinks: [
+      ['Ranking:', '/rank'],
+      ['Ranking admin:', '/rank/admin'],
+    ],
+  });
+  // peer ranking at /rank, saved separately in data/ranking.json (or RANKING_DATA_FILE)
+  attachRanking(server, { isAdminPassword: server.isAdminPassword, dataFile: process.env.RANKING_DATA_FILE });
+  server
     .listen()
     .catch((err) => {
       if (err.code !== 'EADDRINUSE') throw err;

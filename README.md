@@ -98,6 +98,53 @@ Once you're in:
   - Attis is listed in `admins`. Its password is always `ADMIN_PASSWORD`. To change it, edit `.env` and restart.
   - The `/admin` link also has a plain admin-password login.
 
+### Peer ranking for presentations (`/rank`)
+
+This is a separate app that runs on the same server and link. Raters rank every group's presentation in each rubric category, and the grades are designed so that ranking honestly is the best strategy. It has its own data file, `data/ranking.json`, and doesn't touch accounts or chips.
+
+**Links** (printed by `npm run share` along with the exchange links):
+
+- Raters: `<link>/rank`
+- Organizer: `<link>/rank/admin` (log in with `ADMIN_PASSWORD`)
+
+**Running a presentation day:**
+
+1. Open `/rank/admin` and create an evaluation. It needs:
+   - a name
+   - the groups, one per line
+   - optionally, a roster of `Name, Group` lines
+   - the rubric, which is pre-filled with the 6 categories and weights
+   - the presentation share of the grade (default 90%)
+2. Choose how raters sign in:
+   - **With a roster:** only listed names can sign in, and their group is fixed. Leave the group off for raters who aren't presenting.
+   - **Without a roster:** raters type any name and pick their group.
+3. Press **Open ranking** and share the rater link. The **Raters** table shows who has finished, and who on the roster hasn't signed in yet.
+4. When everyone is done, press **Close ranking**. **Publish results** shows each rater the group standings, their own agreement score and their own grade. **Download CSV** exports everything.
+
+**For raters:**
+
+- Sign in with your name.
+- For each category, tap the groups from best to worst. You never rank your own group.
+- Each ranking saves as soon as it's complete. **Copy order from…** reuses the previous category's order, and **↑ ↓ ✕** adjust it.
+- You can change rankings until the organizer closes ranking.
+- A name stays tied to the first device that uses it. If someone switches phones, use **reset sign-in** in the admin page. Their rankings are kept.
+
+**How grades are computed** (see [ranking/scoring.js](ranking/scoring.js)):
+
+| | |
+|---|---|
+| Presentation score P | In a ranking of m groups, position r (1 = best) is worth (m − r)/(m − 1), so first = 1 and last = 0. P is averaged over raters, then weighted by the rubric. Raters never rank their own group, so nothing they submit can change their own group's P. |
+| Agreement score A | For each pair of groups a rater ordered, their order is compared with every other rater who ordered the same pair, excluding teammates. A is the share of those comparisons that agree, weighted by the rubric. Categories a rater didn't rank count as 0. |
+| Group grade | 100 × (0.9 P + 0.1 × the average A of the group's members who ranked). |
+| Individual grade | 100 × (0.9 × their group's P + 0.1 × their own A). Raters who aren't presenting just get A. |
+
+If everyone shares the same view of which presentation was better, honest ranking is a strict best response: changing your ranking can't raise your group's P and can only lower your A. This mechanism has limits:
+
+- **Collusion:** a whole class coordinating on some other order (e.g. alphabetical) would also be "agreed on".
+- **Taste:** on subjective categories, the agreement score rewards predicting what others think, not just your own taste.
+
+The 90/10 split keeps that part small. You can change it under **Edit setup**.
+
 ### How it works
 
 | | |
@@ -149,12 +196,13 @@ In the browser, game scripts use `window.Exchange`:
 - `state` and `me`
 
 ```
-server.js            Ascend Exchange platform: settings, accounts, admins, games
+server.js            Ascend Exchange platform: settings, accounts, admins, games (+ mounts /rank)
 exchange/            game-agnostic core
   orderbook.js       matching engine (one book per market)
   exchange.js        accounts, sessions, markets, chips, P&L, wagers, history, save/load
   server.js          HTTP + Socket.IO, admin auth, broadcasting, persistence
   public/            trading UI (books, order entry, history, admin panels)
 games/smash/         Smash Bros binary options
+ranking/             peer ranking for presentations: scoring.js (the math), store.js, server.js, public/
 test/                engine, accounting, sessions, and end-to-end socket tests
 ```
