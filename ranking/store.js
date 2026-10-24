@@ -232,19 +232,36 @@ export class RankingStore extends EventEmitter {
     return this.current()?.raters.find((r) => r.token && r.token === token) ?? null;
   }
 
-  /** Save one criterion's ranking: every eligible group exactly once, best first. */
-  submitRanking(raterId, { criterionId, order } = {}) {
+  /**
+   * Submit a rater's rankings for every category at once: { [criterionId]: [groupId, ...] } best first,
+   * each listing every group except their own exactly once. Resubmitting replaces the previous submission.
+   */
+  submitAll(raterId, rankings = {}) {
     const ev = this.current();
     if (!ev) throw new RankingError('No evaluation is running');
     if (ev.status !== 'open') throw new RankingError(ev.status === 'closed' ? 'Ranking is closed' : 'Ranking hasn’t opened yet');
     const rater = this.getRater(ev, raterId);
-    if (!ev.criteria.some((c) => c.id === criterionId)) throw new RankingError('Unknown category');
     const eligible = eligibleGroups(ev, rater);
-    if (!Array.isArray(order) || order.length !== eligible.length || new Set(order).size !== order.length || !order.every((g) => eligible.includes(g))) {
-      throw new RankingError('Rank every group (except your own) exactly once');
+    const clean = {};
+    for (const c of ev.criteria) {
+      const order = rankings?.[c.id];
+      if (!Array.isArray(order) || order.length !== eligible.length || new Set(order).size !== order.length || !order.every((g) => eligible.includes(g))) {
+        throw new RankingError(`Finish ranking “${c.name}” first: every group except your own, once each`);
+      }
+      clean[c.id] = [...order];
     }
-    ev.rankings[rater.id] ??= {};
-    ev.rankings[rater.id][criterionId] = [...order];
+    ev.rankings[rater.id] = clean;
+    rater.submittedAt = Date.now();
+    this.changed();
+  }
+
+  /** Erase every rater and submission (e.g. after testing). The setup is kept. */
+  clearRankings(evaluationId) {
+    const ev = this.get(evaluationId);
+    const ids = ev.raters.map((r) => r.id);
+    ev.raters = [];
+    ev.rankings = {};
+    for (const id of ids) this.emit('signout', id);
     this.changed();
   }
 
@@ -284,6 +301,7 @@ export class RankingStore extends EventEmitter {
       groupId: rater.groupId,
       eligible: eligibleGroups(ev, rater),
       rankings: ev.rankings[rater.id] ?? {},
+      submittedAt: rater.submittedAt ?? null,
     };
     if (ev.published) {
       const mine = this.results(ev).raters.find((r) => r.id === rater.id);
@@ -301,7 +319,7 @@ export class RankingStore extends EventEmitter {
         ...this.publicView(),
         published: ev.published,
         roster: ev.roster,
-        raters: ev.raters.map((r) => ({ id: r.id, name: r.name, groupId: r.groupId, signedIn: !!r.token })),
+        raters: ev.raters.map((r) => ({ id: r.id, name: r.name, groupId: r.groupId, signedIn: !!r.token, submittedAt: r.submittedAt ?? null })),
         results: this.results(ev),
       },
       defaults: DEFAULT_CRITERIA,

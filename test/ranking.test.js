@@ -101,23 +101,43 @@ test('no roster: raters type a name and pick a group', () => {
   assert.equal(store.login({ name: 'Eve', groupId: 'none' }).groupId, null);
 });
 
-test('rankings must cover every other group once, and only while open', () => {
+test('one submit for all categories, only while open; resubmitting replaces it', () => {
   const { store, ev } = storeWithEval();
   const [alpha, beta, gamma, delta] = ev.groups.map((g) => g.id);
   const dee = store.login({ name: 'Dee', groupId: alpha });
-  const c = ev.criteria[0].id;
-  assert.throws(() => store.submitRanking(dee.id, { criterionId: c, order: [beta, gamma, delta] }), /hasn’t opened/);
+  const all = (order) => Object.fromEntries(ev.criteria.map((c) => [c.id, order]));
+  assert.throws(() => store.submitAll(dee.id, all([beta, gamma, delta])), /hasn’t opened/);
   store.setStatus(ev.id, 'open');
-  assert.throws(() => store.submitRanking(dee.id, { criterionId: c, order: [alpha, beta, gamma] }), /exactly once/);
-  assert.throws(() => store.submitRanking(dee.id, { criterionId: c, order: [beta, gamma] }), /exactly once/);
-  store.submitRanking(dee.id, { criterionId: c, order: [gamma, beta, delta] });
+  assert.throws(() => store.submitAll(dee.id, all([alpha, beta, gamma])), /Finish ranking/);
+  const partial = all([beta, gamma, delta]);
+  delete partial[ev.criteria[5].id];
+  assert.throws(() => store.submitAll(dee.id, partial), /Fun Factor/);
+  assert.equal(Object.keys(ev.rankings).length, 0, 'nothing saved until a complete submit');
+  store.submitAll(dee.id, all([gamma, beta, delta]));
+  assert.ok(dee.submittedAt);
+  store.submitAll(dee.id, all([beta, gamma, delta]));
+  assert.deepEqual(ev.rankings[dee.id][ev.criteria[0].id], [beta, gamma, delta]);
   store.setStatus(ev.id, 'closed');
-  assert.throws(() => store.submitRanking(dee.id, { criterionId: c, order: [beta, gamma, delta] }), /closed/);
+  assert.throws(() => store.submitAll(dee.id, all([beta, gamma, delta])), /closed/);
   assert.throws(() => store.editEvaluation(ev.id, { groups: 'Alpha\nBeta' }), /can’t change/);
   store.editEvaluation(ev.id, { alpha: 80 });
   assert.equal(ev.alpha, 0.8);
   const copy = RankingStore.fromJSON(JSON.parse(JSON.stringify(store)));
   assert.deepEqual(copy.results(copy.current()), store.results(ev));
+});
+
+test('clear all rankings erases raters and submissions but keeps the setup', () => {
+  const { store, ev } = storeWithEval();
+  store.setStatus(ev.id, 'open');
+  const ids = ev.groups.map((g) => g.id);
+  const t = store.login({ name: 'Tester', groupId: 'none' });
+  store.submitAll(t.id, Object.fromEntries(ev.criteria.map((c) => [c.id, ids])));
+  const signedOut = [];
+  store.on('signout', (id) => signedOut.push(id));
+  store.clearRankings(ev.id);
+  assert.deepEqual([ev.raters.length, Object.keys(ev.rankings).length, ev.groups.length, ev.status], [0, 0, 4, 'open']);
+  assert.deepEqual(signedOut, [t.id]);
+  assert.ok(store.login({ name: 'Tester', groupId: 'none' }), 'the name is free again');
 });
 
 test('end to end over the /rank namespace', { timeout: 10000 }, async (t) => {
@@ -159,10 +179,9 @@ test('end to end over the /rank namespace', { timeout: 10000 }, async (t) => {
     const res = await ask(c, 'login', { name });
     assert.ok(res.token);
     const me = await next(c, 'me', (m) => m.name === name);
-    for (const crit of view.current.criteria) {
-      const r = await ask(c, 'rank', { criterionId: crit.id, order: truth.filter((g) => me.eligible.includes(g)) });
-      assert.equal(r.ok, true, r.error);
-    }
+    const order = truth.filter((g) => me.eligible.includes(g));
+    const r = await ask(c, 'submit', { rankings: Object.fromEntries(view.current.criteria.map((crit) => [crit.id, order])) });
+    assert.equal(r.ok, true, r.error);
   }
   const done = await next(admin, 'admin', (a) => a.current.results.raters.every((r) => r.completed === 6));
   assert.deepEqual(done.current.results.groups.map((g) => g.name), ['A', 'B', 'C', 'D']);

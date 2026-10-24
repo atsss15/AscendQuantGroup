@@ -118,16 +118,18 @@ This is a separate app that runs on the same server and link. Raters rank every 
 2. Choose how raters sign in:
    - **With a roster:** only listed names can sign in, and their group is fixed. Leave the group off for raters who aren't presenting.
    - **Without a roster:** raters type any name and pick their group.
-3. Press **Open ranking** and share the rater link. The **Raters** table shows who has finished, and who on the roster hasn't signed in yet.
+3. Press **Open ranking** and share the rater link. The **Raters** table shows who has submitted, and who on the roster hasn't signed in yet.
 4. When everyone is done, press **Close ranking**. **Publish results** shows each rater the group standings, their own agreement score and their own grade. **Download CSV** exports everything.
 
 **For raters:**
 
 - Sign in with your name.
 - For each category, tap the groups from best to worst. You never rank your own group.
-- Each ranking saves as soon as it's complete. **Copy order from…** reuses the previous category's order, and **↑ ↓ ✕** adjust it.
-- You can change rankings until the organizer closes ranking.
-- A name stays tied to the first device that uses it. If someone switches phones, use **reset sign-in** in the admin page. Their rankings are kept.
+- Move between categories freely. **Copy order from…** reuses the previous category's order, and **↑ ↓ ✕** adjust it. Drafts stay on your phone, even after a refresh.
+- Nothing is sent until you press **Submit rankings**, which unlocks once every category is ranked. You can change things and submit again until the organizer closes ranking.
+- A name stays tied to the first device that uses it. If someone switches phones, use **reset sign-in** in the admin page. Their submitted rankings are kept.
+
+**Erasing test submissions:** in `/rank/admin`, **remove** deletes one rater and their rankings. **Clear all rankings** erases every rater and submission but keeps the groups and rubric.
 
 **How grades are computed** (see [ranking/scoring.js](ranking/scoring.js)):
 

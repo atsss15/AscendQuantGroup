@@ -74,6 +74,7 @@ export function attachRanking({ app, io }, { isAdminPassword, dataFile = path.re
     delete: (a) => store.deleteEvaluation(a.evaluationId),
     resetRater: (a) => store.resetRater(a.evaluationId, a.raterId),
     removeRater: (a) => store.removeRater(a.evaluationId, a.raterId),
+    clear: (a) => store.clearRankings(a.evaluationId),
   };
 
   nsp.on('connection', (socket) => {
@@ -90,9 +91,9 @@ export function attachRanking({ app, io }, { isAdminPassword, dataFile = path.re
       socket.data.raterId = null;
     });
 
-    handle(socket, 'rank', (payload) => {
+    handle(socket, 'submit', ({ rankings } = {}) => {
       if (!socket.data.raterId) throw new RankingError('Sign in first');
-      store.submitRanking(socket.data.raterId, payload);
+      store.submitAll(socket.data.raterId, rankings);
     });
 
     handle(socket, 'admin:login', ({ password, adminToken } = {}) => {

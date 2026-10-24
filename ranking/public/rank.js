@@ -52,7 +52,7 @@
   const KEY_ADMIN = 'rank:admin';
 
   const store = { ev: null, me: null, admin: null, isAdmin: false, step: 0, drafts: {} };
-  const groupName = (id) => store.ev?.groups.find((g) => g.id === id)?.name ?? (id ? '?' : 'not presenting');
+  const groupName = (id) => store.ev?.groups.find((g) => g.id === id)?.name ?? (id ? '?' : 'no group');
 
   // ------------------------------------------------------------------ socket
 
@@ -112,6 +112,21 @@
 
   // ------------------------------------------------------------------ rater page
 
+  // Rankings are drafts on this device (kept across refreshes) until the rater presses Submit.
+  const draftKey = () => `rank:draft:${store.ev.id}:${store.me.id}`;
+  function loadDrafts() {
+    if (store.draftsFor === draftKey()) return;
+    store.draftsFor = draftKey();
+    try {
+      store.drafts = JSON.parse(storage.get(draftKey()) ?? 'null') ?? {};
+    } catch {
+      store.drafts = {};
+    }
+  }
+  const draftFor = (c) => store.drafts[c.id] ?? store.me.rankings[c.id] ?? [];
+  const isComplete = (c) => draftFor(c).length === store.me.eligible.length;
+  const sameOrder = (a, b) => !!a && !!b && a.length === b.length && a.every((x, i) => x === b[i]);
+
   function renderRater() {
     const app = $('#app');
     const ev = store.ev;
@@ -122,25 +137,64 @@
     );
     if (!ev) return app.replaceChildren(h('div', { class: 'empty' }, 'No ranking is set up right now. This page updates automatically.'));
     if (!me) return app.replaceChildren(loginCard(ev));
+    loadDrafts();
 
     const criteria = ev.criteria;
     store.step = Math.min(store.step, criteria.length - 1);
-    const done = criteria.filter((c) => me.rankings[c.id]).length;
+    const open = ev.status === 'open';
+    const done = criteria.filter(isComplete).length;
     app.replaceChildren(
       h('div', { class: 'card' },
         h('div', { class: 'row' }, h('h2', { class: 'grow' }, ev.name), statusPill(ev)),
         h('p', { class: 'muted' }, me.groupId
           ? `You're in ${groupName(me.groupId)}, so you rank the other ${me.eligible.length} groups.`
-          : `You're not presenting, so you rank all ${me.eligible.length} groups.`),
-        h('p', {}, h('b', { class: done === criteria.length ? 'up' : '' }, `${done} of ${criteria.length}`), ' categories ranked',
-          done === criteria.length ? ' ✓ all done. You can still change them until ranking closes.' : ''),
+          : `You're not in a group, so you rank all ${me.eligible.length} groups.`),
+        h('p', {}, 'Rank each category, moving back and forth as much as you like. Nothing is sent until you press ', h('b', {}, 'Submit'), '.'),
         howScored(ev)),
-      ev.status === 'draft' ? h('div', { class: 'card' }, h('p', {}, 'Ranking hasn’t opened yet. This page updates automatically when it does.')) : '',
+      ev.status === 'draft' ? h('div', { class: 'card' }, h('p', {}, 'Ranking hasn’t opened yet. You can start ranking now; Submit unlocks when it opens.')) : '',
       h('div', { class: 'steps' }, criteria.map((c, i) =>
-        h('button', { type: 'button', class: `step ${i === store.step ? 'active' : ''} ${me.rankings[c.id] ? 'done' : ''}`, onclick: () => { store.step = i; render(); } }, c.name))),
+        h('button', { type: 'button', class: `step ${i === store.step ? 'active' : ''} ${isComplete(c) ? 'done' : ''}`, onclick: () => { store.step = i; render(); } }, c.name))),
       editor(ev, me, criteria[store.step]),
+      submitPanel(ev, me, done),
       ev.published ? resultsForRater(ev, me) : '',
     );
+  }
+
+  function submitPanel(ev, me, done) {
+    const criteria = ev.criteria;
+    const all = done === criteria.length;
+    const submitted = !!me.submittedAt;
+    const changed = criteria.some((c) => !sameOrder(draftFor(c), me.rankings[c.id]));
+    const at = submitted ? new Date(me.submittedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+    if (ev.status === 'closed') {
+      return h('div', { class: 'card' }, h('p', {}, submitted ? `Ranking is closed. Your rankings submitted at ${at} are final.` : 'Ranking is closed. You didn’t submit in time.'));
+    }
+    let message;
+    if (!all) message = h('span', { class: 'hint' }, `${done} of ${criteria.length} categories ranked. Rank them all, then submit.`);
+    else if (submitted && !changed) message = h('span', { class: 'saved' }, `Submitted ✓ at ${at}. You can still change rankings and submit again until ranking closes.`);
+    else if (submitted) message = h('span', { class: 'unsaved' }, 'You changed your rankings. Submit again to update them.');
+    else message = h('span', { class: 'hint' }, 'All categories ranked. Submit when you’re happy with them.');
+    return h('div', { class: 'card' },
+      h('div', { class: 'row' },
+        h('span', { class: 'grow' }, message),
+        h('button', {
+          type: 'button',
+          class: 'primary',
+          disabled: !all || ev.status !== 'open' || (submitted && !changed),
+          onclick: submit,
+        }, submitted ? 'Submit changes' : 'Submit rankings')));
+  }
+
+  async function submit() {
+    const rankings = Object.fromEntries(store.ev.criteria.map((c) => [c.id, draftFor(c)]));
+    const res = await call('submit', { rankings });
+    if (!res.ok) return toast(res.error, 'error');
+    storage.del(draftKey());
+    store.drafts = {};
+    store.me.rankings = rankings;
+    store.me.submittedAt = Date.now();
+    toast('Submitted ✓ Your rankings are in.');
+    render(true);
   }
 
   function loginCard(ev) {
@@ -185,18 +239,16 @@
   }
 
   function editor(ev, me, c) {
-    const saved = me.rankings[c.id] ?? null;
-    const draft = store.drafts[c.id] ?? (saved ? [...saved] : []);
-    const open = ev.status === 'open';
+    const editable = ev.status !== 'closed';
+    const draft = editable ? draftFor(c) : me.rankings[c.id] ?? [];
     const complete = draft.length === me.eligible.length;
-    const same = saved && complete && draft.every((g, i) => g === saved[i]);
     const prev = store.step > 0 ? ev.criteria[store.step - 1] : null;
-    const prevRanking = prev && (store.drafts[prev.id]?.length === me.eligible.length ? store.drafts[prev.id] : me.rankings[prev.id]);
+    const prevRanking = prev && isComplete(prev) ? draftFor(prev) : null;
 
     const set = (next) => {
       store.drafts[c.id] = next;
+      storage.set(draftKey(), JSON.stringify(store.drafts));
       render();
-      if (next.length === me.eligible.length) save(c, next);
     };
     const move = (i, d) => {
       const next = [...draft];
@@ -204,15 +256,11 @@
       set(next);
     };
 
-    const status = !open
-      ? h('span', { class: 'hint' }, saved ? 'Your ranking (locked)' : 'Not ranked')
-      : same
-        ? h('span', { class: 'saved' }, 'Saved ✓')
-        : complete
-          ? h('span', { class: 'hint' }, 'Saving…')
-          : h('span', { class: draft.length ? 'unsaved' : 'hint' }, draft.length
-            ? `Tap the remaining ${me.eligible.length - draft.length} to finish. Not saved yet.`
-            : 'Tap the groups from best to worst.');
+    const status = !editable
+      ? h('span', { class: 'hint' }, draft.length ? 'Your submitted ranking' : 'Not submitted')
+      : complete
+        ? h('span', { class: 'saved' }, 'Ranked ✓')
+        : h('span', { class: 'hint' }, draft.length ? `Tap the remaining ${me.eligible.length - draft.length}.` : 'Tap the groups from best to worst.');
 
     return h('div', { class: 'card' },
       h('div', { class: 'row' }, h('h2', { class: 'grow' }, c.name), h('span', { class: 'muted' }, `${c.weight}%`)),
@@ -221,32 +269,21 @@
         h('div', { class: 'ranked-item' },
           h('span', { class: 'num' }, i + 1),
           h('span', { class: 'name' }, groupName(g)),
-          open ? [
+          editable ? [
             h('button', { type: 'button', class: 'small', disabled: i === 0, onclick: () => move(i, -1), 'aria-label': 'Move up' }, '↑'),
             h('button', { type: 'button', class: 'small', disabled: i === draft.length - 1, onclick: () => move(i, 1), 'aria-label': 'Move down' }, '↓'),
             h('button', { type: 'button', class: 'small', onclick: () => set(draft.filter((x) => x !== g)), 'aria-label': 'Remove' }, '✕'),
           ] : ''))),
-      open && !complete ? h('p', { class: 'hint' }, draft.length ? `Tap your #${draft.length + 1}:` : 'Tap your #1 (best):') : '',
-      open && !complete ? h('div', { class: 'pool' }, me.eligible.filter((g) => !draft.includes(g)).map((g) =>
+      editable && !complete ? h('p', { class: 'hint' }, draft.length ? `Tap your #${draft.length + 1}:` : 'Tap your #1 (best):') : '',
+      editable && !complete ? h('div', { class: 'pool' }, me.eligible.filter((g) => !draft.includes(g)).map((g) =>
         h('button', { type: 'button', onclick: () => set([...draft, g]) }, groupName(g)))) : '',
       h('div', { class: 'row' },
         status,
         h('span', { class: 'grow' }),
-        open && !draft.length && prevRanking ? h('button', { type: 'button', class: 'small', onclick: () => set([...prevRanking]) }, `Copy order from ${prev.name}`) : '',
-        open && draft.length ? h('button', { type: 'button', class: 'small', onclick: () => set([]) }, 'Clear') : '',
+        editable && !draft.length && prevRanking ? h('button', { type: 'button', class: 'small', onclick: () => set([...prevRanking]) }, `Copy order from ${prev.name}`) : '',
+        editable && draft.length ? h('button', { type: 'button', class: 'small', onclick: () => set([]) }, 'Clear') : '',
         store.step > 0 ? h('button', { type: 'button', onclick: () => { store.step--; render(); } }, '← Back') : '',
-        store.step < ev.criteria.length - 1 ? h('button', { type: 'button', class: 'primary', onclick: () => { store.step++; render(); } }, 'Next →') : ''));
-  }
-
-  let saving = 0;
-  async function save(c, order) {
-    saving++;
-    const res = await call('rank', { criterionId: c.id, order });
-    saving--;
-    if (!res.ok) return toast(res.error, 'error');
-    if (store.drafts[c.id]?.join() === order.join()) delete store.drafts[c.id];
-    store.me.rankings[c.id] = order;
-    render(true);
+        store.step < ev.criteria.length - 1 ? h('button', { type: 'button', class: complete ? 'primary' : '', onclick: () => { store.step++; render(); } }, 'Next →') : ''));
   }
 
   function resultsForRater(ev, me) {
@@ -396,8 +433,7 @@
 
     // raters
     const byId = new Map(results.raters.map((r) => [r.id, r]));
-    const nCrit = cur.criteria.length;
-    const submitted = results.raters.filter((r) => r.completed === nCrit).length;
+    const submitted = cur.raters.filter((r) => r.submittedAt).length;
     const notJoined = cur.roster.filter((r) => !cur.raters.some((x) => x.name.toLowerCase() === r.name.toLowerCase()));
     const raterRows = [...cur.raters]
       .sort((a, b) => groupName(a.groupId).localeCompare(groupName(b.groupId)) || a.name.localeCompare(b.name))
@@ -406,7 +442,7 @@
         return h('tr', {},
           h('td', {}, h('span', { class: `dot ${r.signedIn ? 'on' : ''}`, title: r.signedIn ? 'Signed in on a device' : 'Not signed in' }), r.name),
           h('td', {}, groupName(r.groupId)),
-          h('td', { class: `num progress ${res?.completed === nCrit ? 'full' : ''}` }, `${res?.completed ?? 0}/${nCrit}`),
+          h('td', { class: `progress ${r.submittedAt ? 'full' : ''}` }, r.submittedAt ? `✓ ${new Date(r.submittedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'not yet'),
           h('td', { class: 'num' }, pct(res?.A)),
           h('td', { class: 'num' }, grade(res?.grade)),
           h('td', {},
@@ -416,10 +452,16 @@
             } }, 'remove')));
       });
     sections.push(h('div', { class: 'card' },
-      h('div', { class: 'row' }, h('h3', { class: 'grow' }, `Raters: ${submitted} of ${cur.raters.length} finished`)),
+      h('div', { class: 'row' },
+        h('h3', { class: 'grow' }, `Raters: ${submitted} of ${cur.raters.length} submitted`),
+        cur.raters.length ? h('button', { type: 'button', class: 'small danger', onclick: () => {
+          if (confirm(`Erase all ${cur.raters.length} raters and their rankings from "${cur.name}"? Use this to clear test submissions. The groups and rubric are kept.`)) {
+            adminCmd('clear', { evaluationId: cur.id }, 'All rankings cleared');
+          }
+        } }, 'Clear all rankings') : ''),
       notJoined.length ? h('p', { class: 'muted small' }, `Not signed in yet: ${notJoined.map((r) => r.name).join(', ')}`) : '',
       h('div', { class: 'scroll-x' }, h('table', { class: 'list' },
-        h('thead', {}, h('tr', {}, h('th', {}, 'rater'), h('th', {}, 'group'), h('th', { class: 'num' }, 'ranked'), h('th', { class: 'num' }, 'agreement'), h('th', { class: 'num' }, 'grade'), h('th', {}, ''))),
+        h('thead', {}, h('tr', {}, h('th', {}, 'rater'), h('th', {}, 'group'), h('th', {}, 'submitted'), h('th', { class: 'num' }, 'agreement'), h('th', { class: 'num' }, 'grade'), h('th', {}, ''))),
         h('tbody', {}, raterRows.length ? raterRows : h('tr', {}, h('td', { colSpan: 6, class: 'muted' }, 'Nobody has signed in yet.')))))));
     return sections;
   }
