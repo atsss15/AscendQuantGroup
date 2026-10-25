@@ -235,3 +235,5 @@ td.editable:hover { background: rgba(88, 166, 255, 0.12); outline: 1px dashed va
 td.editable input { width: 90px; padding: 2px 6px; text-align: right; }
 .session-live { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 table.accounts td.total { font-weight: 700; }
+a.navlink { text-decoration: none; display: inline-flex; align-items: center; color: var(--muted); border: 1px solid transparent; border-radius: 6px; padding: 6px 10px; }
+a.navlink:hover { color: var(--text); }

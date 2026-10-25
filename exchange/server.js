@@ -264,8 +264,18 @@ export function createExchangeServer(platform, opts = {}) {
   }
 
   const isAdminPassword = (password) => safeEqual(password, adminPassword);
+  /** For other apps on this server: who owns this exchange session token, and are they an admin? */
+  const authenticate = (token) => {
+    if (!token) return null;
+    try {
+      const { user } = exchange.join({ token });
+      return { user, isAdmin: isAdminAccount(user) };
+    } catch {
+      return null;
+    }
+  };
 
-  return { app, io, httpServer, exchange, listen, close, save, isAdminPassword };
+  return { app, io, httpServer, exchange, listen, close, save, isAdminPassword, authenticate };
 }
 
 /** Register a socket event whose handler result (or error) goes back through the ack callback. */

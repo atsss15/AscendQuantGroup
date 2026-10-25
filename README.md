@@ -98,6 +98,49 @@ Once you're in:
   - Attis is listed in `admins`. Its password is always `ADMIN_PASSWORD`. To change it, edit `.env` and restart.
   - The `/admin` link also has a plain admin-password login.
 
+### Algo trading competition (`/algo`)
+
+This is an IMC Prosperity-style competition on the same server and link. Players sign in with their exchange accounts and write a Python `Trader`. Every night you simulate a new day in which all submitted algorithms trade against the bots and each other.
+
+**One-time setup:** run `npm run algo:setup`. It creates a project-local Python (`.venv/`, git-ignored) with numpy, pandas and jsonpickle for player code.
+
+**Links:** `npm run share` prints `<link>/algo`. Players and you use the same page, and your admin controls appear when you're signed in as Attis.
+
+**Running it:**
+
+1. Press **Generate data day** a few times before the start (or, with the server stopped, run `npm run algo:reset-data` to replace them with 3 fresh ones; `npm run algo:export` zips them for sending). Data days run the bots only, and players get their prices and trades to study and backtest on. Three data days of 10,000 ticks gives 30,000 ticks.
+2. Each night, press **Run Day N** after the deadline. It runs every player's latest submission for one simulated day, then releases the results and that day's data right away. **Delete this day** removes a bad run so you can run it again.
+3. **Practice week:** while the admin checkbox is on (it starts on), days run and show standings but don't count toward the cumulative leaderboard. Turn it off when the real competition starts. Each day also has a **Count this day** / **Make it practice** toggle.
+4. Set the deadline text shown to players in the admin panel. The day only runs when you press the button.
+
+**What players get:**
+
+- **Editor:** a Python editor with autosave, starting from a Prosperity-compatible template (`from datamodel import Order, TradingState, ...`).
+- **Run backtest:** replays a released day's prices and bots with only their algorithm and reports P&L by product, errors and their prints. Building a full backtester on the downloaded data is up to them.
+- **Submit:** their latest submission is what runs in the next day.
+- **Results:** P&L per day, a cumulative leaderboard, and their own trades and log for each day.
+- **Market data:** a price chart, an order book they can scrub tick by tick, and downloads of `prices.csv` / `trades.csv` in Prosperity's format.
+
+**Each tick** ([algo/sim.js](algo/sim.js)):
+
+1. Bots post quotes.
+2. Every algorithm gets the same `TradingState` and replies at the same time. Orders that could break a product's position limit are all rejected for that product.
+3. Algorithm orders take liquidity from bot quotes: best price first, then shared **pro-rata** at each price, since everything in a tick arrives at once.
+4. Algorithm orders that cross each other clear in a uniform-price batch auction.
+5. Taker bots trade against whatever rests.
+6. Everything is cancelled.
+
+At the end of the day, positions are marked at fair value. Each day has its own seed, so backtests replay exactly the same prices and bot quotes.
+
+**Designing the game (kept secret):** the real design goes in `algo/secret/competition.js`. That folder is git-ignored, so the design never reaches GitHub. The server uses it whenever it exists, and otherwise falls back to the public placeholder in [algo/competition.example.js](algo/competition.example.js). Keep a private backup of the secret file, because it isn't in the repo. A design file defines:
+
+- **products:** each with a position limit.
+- **price model:** produces fair values each tick.
+- **bots:** `quote()` for makers and `take()` for takers.
+- **settings:** ticks per day, the per-call time limit, and the player template.
+
+**Player code safety:** each algorithm runs in its own Python process ([algo/py/host.py](algo/py/host.py)) with a clean environment, a CPU-time cap, an import allowlist, and a hook that blocks file access, network, subprocesses and similar operations. That's solid for a club competition, but it isn't a hardened sandbox. For strangers, run the server inside a container.
+
 ### Peer ranking for presentations (`/rank`)
 
 This is a separate app that runs on the same server and link. Raters rank every group's presentation in each rubric category, and the grades are designed so that ranking honestly is the best strategy. It has its own data file, `data/ranking.json`, and doesn't touch accounts or chips.
@@ -206,5 +249,6 @@ exchange/            game-agnostic core
   public/            trading UI (books, order entry, history, admin panels)
 games/smash/         Smash Bros binary options
 ranking/             peer ranking for presentations: scoring.js (the math), store.js, server.js, public/
+algo/                algo competition: competition.js (products, prices, bots), matching.js, sim.js, runner.js + py/ (sandboxed Python), service.js, server.js, public/
 test/                engine, accounting, sessions, and end-to-end socket tests
 ```

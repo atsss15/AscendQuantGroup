@@ -8,6 +8,9 @@
     "start": "node --env-file-if-exists=.env server.js",
     "dev": "node --env-file-if-exists=.env --watch server.js",
     "share": "SHARE=1 node --env-file-if-exists=.env server.js",
+    "algo:reset-data": "node algo/tools.js reset-data",
+    "algo:export": "node algo/tools.js export",
+    "algo:setup": "python3 -m venv .venv && .venv/bin/pip install numpy pandas jsonpickle",
     "test": "node --test"
   },
   "engines": {

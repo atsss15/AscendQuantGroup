@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ascend Algo</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material-darker.min.css">
+  <link rel="stylesheet" href="/algo/algo.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span>Ascend Algo</span>
+      <span id="comp-name" class="muted"></span>
+    </div>
+    <span id="day-status" class="day-status"></span>
+    <nav class="actions">
+      <a class="navlink" href="/">Exchange</a>
+      <span id="who" class="muted"></span>
+      <button type="button" id="signout" class="ghost" hidden>Sign out</button>
+    </nav>
+  </header>
+
+  <main class="algo-main">
+    <section id="admin-area" class="card admin-card" hidden></section>
+
+    <div class="algo-grid">
+      <div class="col">
+        <section class="card">
+          <div class="toolbar">
+            <h2>trader.py</h2>
+            <span id="save-state" class="muted small"></span>
+            <span class="grow"></span>
+            <button type="button" id="reset-template" class="small ghost">Reset to template</button>
+            <button type="button" id="download-code" class="small ghost">Download</button>
+          </div>
+          <div id="editor-host"></div>
+          <div class="toolbar">
+            <label class="muted small">Backtest on <select id="bt-day"></select></label>
+            <button type="button" id="bt-run">Run backtest</button>
+            <span class="grow"></span>
+            <span id="submit-state" class="small"></span>
+            <button type="button" id="submit" class="primary">Submit</button>
+          </div>
+        </section>
+        <section class="card" id="bt-card">
+          <h2>Backtest</h2>
+          <div id="bt-output" class="muted">Run a backtest to see your P&amp;L on a past day. It replays that day's prices and bots with only your algorithm trading.</div>
+        </section>
+      </div>
+
+      <div class="col">
+        <section class="card">
+          <h2>Results</h2>
+          <div id="results"></div>
+        </section>
+        <section class="card">
+          <div class="toolbar">
+            <h2>Market data</h2>
+            <span class="grow"></span>
+            <select id="md-day"></select>
+          </div>
+          <div id="md-products" class="tabs-row"></div>
+          <canvas id="chart" height="220"></canvas>
+          <div class="toolbar">
+            <input id="md-slider" type="range" min="0" max="0" value="0" class="grow">
+            <span id="md-ts" class="muted small mono"></span>
+          </div>
+          <div id="md-book"></div>
+          <div id="md-downloads" class="downloads"></div>
+        </section>
+        <section class="card">
+          <details>
+            <summary><h2 style="display:inline">How it works</h2></summary>
+            <div id="howto" class="howto"></div>
+          </details>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <div id="login" class="modal" hidden>
+    <form id="login-form" class="modal-box">
+      <h1>Ascend Algo</h1>
+      <p class="muted">Sign in with your exchange account.</p>
+      <select id="login-name" required></select>
+      <input id="login-password" type="password" placeholder="Password" autocomplete="current-password" required>
+      <button type="submit" class="primary">Sign in</button>
+      <p id="login-error" class="error"></p>
+    </form>
+  </div>
+
+  <div id="toasts"></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/python/python.min.js"></script>
+  <script src="/algo/algo.js"></script>
+</body>
+</html>

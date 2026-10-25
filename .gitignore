@@ -2,3 +2,6 @@ node_modules/
 data/
 .DS_Store
 .env
+.venv/
+algo/secret/
+__pycache__/

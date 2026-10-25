@@ -1,6 +1,8 @@
 import { fileURLToPath } from 'node:url';
 import { createExchangeServer } from './exchange/index.js';
 import { attachRanking } from './ranking/server.js';
+import { attachAlgo } from './algo/server.js';
+import { competition } from './algo/competition.js';
 import { smash } from './games/smash/game.js';
 
 /**
@@ -26,12 +28,15 @@ export const platform = {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const server = createExchangeServer(platform, {
     extraLinks: [
+      ['Algo:', '/algo'],
       ['Ranking:', '/rank'],
       ['Ranking admin:', '/rank/admin'],
     ],
   });
   // peer ranking at /rank, saved separately in data/ranking.json (or RANKING_DATA_FILE)
   attachRanking(server, { isAdminPassword: server.isAdminPassword, dataFile: process.env.RANKING_DATA_FILE });
+  // algo trading competition at /algo; players use their exchange accounts (data in data/algo/ or ALGO_DATA_DIR)
+  attachAlgo(server, { config: competition, dir: process.env.ALGO_DATA_DIR });
   server
     .listen()
     .catch((err) => {
