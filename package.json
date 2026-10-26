@@ -8,8 +8,12 @@
     "start": "node --env-file-if-exists=.env server.js",
     "dev": "node --env-file-if-exists=.env --watch server.js",
     "share": "SHARE=1 node --env-file-if-exists=.env server.js",
+    "share:bg": "node tools/background.js start",
+    "link": "node tools/background.js link",
+    "stop": "node tools/background.js stop",
     "algo:reset-data": "node algo/tools.js reset-data",
     "algo:export": "node algo/tools.js export",
+    "migrate": "node --env-file-if-exists=.env tools/migrate.js",
     "algo:setup": "python3 -m venv .venv && .venv/bin/pip install numpy pandas jsonpickle",
     "test": "node --test"
   },

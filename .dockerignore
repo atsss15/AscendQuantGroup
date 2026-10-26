@@ -1,0 +1,10 @@
+# never put these in the image
+.env
+data
+algo/secret
+.venv
+node_modules
+.git
+.claude
+**/__pycache__
+.DS_Store

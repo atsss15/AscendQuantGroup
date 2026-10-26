@@ -1,9 +1,11 @@
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createExchangeServer } from './exchange/index.js';
 import { attachRanking } from './ranking/server.js';
 import { attachAlgo } from './algo/server.js';
 import { competition } from './algo/competition.js';
 import { smash } from './games/smash/game.js';
+import { applyPendingRestore, attachRestore } from './deploy/restore.js';
 
 /**
  * Ascend Exchange: one platform, persistent accounts, one session per game night.
@@ -26,6 +28,8 @@ export const platform = {
 };
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const dataDir = path.resolve(process.env.DATA_DIR ?? 'data');
+  applyPendingRestore(dataDir); // data uploaded with `npm run migrate` is swapped in before anything loads
   const server = createExchangeServer(platform, {
     extraLinks: [
       ['Algo:', '/algo'],
@@ -37,6 +41,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   attachRanking(server, { isAdminPassword: server.isAdminPassword, dataFile: process.env.RANKING_DATA_FILE });
   // algo trading competition at /algo; players use their exchange accounts (data in data/algo/ or ALGO_DATA_DIR)
   attachAlgo(server, { config: competition, dir: process.env.ALGO_DATA_DIR });
+  attachRestore(server.app, { isAdminPassword: server.isAdminPassword, dataDir });
   server
     .listen()
     .catch((err) => {

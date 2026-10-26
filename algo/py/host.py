@@ -10,6 +10,7 @@ working directory, CPU time and file-size limits, a restricted import list, no `
 refuses file access outside the Python installation, network sockets, subprocesses and similar operations.
 """
 import builtins
+import importlib.util
 import io
 import json
 import os
@@ -27,12 +28,17 @@ ALLOWED_IMPORTS = {
     "functools", "heapq", "bisect", "random", "dataclasses", "string", "copy", "decimal", "fractions", "operator",
     "re", "enum", "abc", "time", "datetime", "__future__", "cmath", "array", "pickle", "base64", "zlib",
 }
+# Light modules and numpy (used by most players, ~12 MB) load now; pandas (~50 MB) and jsonpickle only
+# when a player imports them, which keeps memory per player small.
 for name in ["math", "statistics", "json", "collections", "itertools", "functools", "heapq", "bisect", "random",
              "dataclasses", "string", "copy", "decimal", "fractions", "operator", "re", "enum", "abc", "time",
-             "datetime", "cmath", "array", "pickle", "base64", "zlib", "typing", "datamodel", "numpy", "pandas", "jsonpickle"]:
+             "datetime", "cmath", "array", "pickle", "base64", "zlib", "typing", "datamodel", "numpy"]:
     try:
         __import__(name)
     except Exception:
+        ALLOWED_IMPORTS.discard(name)
+for name in ["pandas", "jsonpickle"]:
+    if importlib.util.find_spec(name) is None:
         ALLOWED_IMPORTS.discard(name)
 
 

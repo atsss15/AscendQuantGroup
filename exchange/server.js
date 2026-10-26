@@ -255,7 +255,7 @@ export function createExchangeServer(platform, opts = {}) {
   }
 
   if (opts.handleSignals !== false) {
-    for (const sig of ['SIGINT', 'SIGTERM']) {
+    for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) { // SIGHUP: the Terminal window was closed
       process.once(sig, () => {
         if (dataFile) save();
         process.exit(0);
@@ -339,7 +339,9 @@ function startTunnel(port, extraLinks = []) {
     console.log(`  Players:  ${url}`);
     console.log(`  Admin:    ${url}/admin`);
     for (const [label, suffix] of extraLinks) console.log(`  ${label.padEnd(9)} ${url}${suffix}`);
-    console.log('  (valid while this terminal stays open)\n');
+    console.log('  (valid while this terminal stays open)');
+    console.log('  Checking that the link works…\n');
+    checkLink(url);
   };
   child.stdout.on('data', scan);
   child.stderr.on('data', scan);
@@ -348,4 +350,23 @@ function startTunnel(port, extraLinks = []) {
     else console.log(`  Tunnel error: ${err.message}`);
   });
   process.on('exit', () => child.kill());
+}
+
+/** Free tunnel links sometimes never go live; test it the way a visitor would and say so either way. */
+async function checkLink(url, timeoutMs = 90_000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    await new Promise((r) => setTimeout(r, 5000));
+    try {
+      const res = await fetch(`${url}/platform.json`, { signal: AbortSignal.timeout(8000) });
+      if (res.ok) {
+        console.log(`  ✓ Link is live: ${url}\n`);
+        return;
+      }
+    } catch {
+      // not reachable yet
+    }
+  }
+  console.log('\n  ✗ This link still isn\'t reachable after 90 seconds; Cloudflare probably handed out a dud.');
+  console.log('    Press Ctrl+C and run `npm run share` again to get a new link.\n');
 }

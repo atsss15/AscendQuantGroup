@@ -45,6 +45,16 @@ A real-time trading platform for game nights. Every market has a live central li
 5. At the end of the night, press **End session**. It moves to everyone's History tab. Settle (or delete) any match people still hold positions in first.
 6. Press `Ctrl+C` in the terminal to stop the server. Everything is saved in `data/ascend.json` and loaded again next time.
 
+**Keep it running without a Terminal window:**
+
+| Command | What it does |
+|---|---|
+| `npm run share:bg` | Starts the server and public link in the background. Closing Terminal won't stop it, and it keeps the Mac awake while it runs. |
+| `npm run link` | Shows the current links at any time. |
+| `npm run stop` | Stops it, saving first. |
+
+The log is in `data/server.log`. The link still changes whenever the server restarts, and nothing runs while the Mac is shut down or its lid is closed on battery.
+
 Each time you run `npm run share` you get a new link. If everyone is on the same Wi‑Fi, `npm start` is enough: it prints a `Same Wi-Fi` link and doesn't use the tunnel.
 
 If you'd like a permanent link that people can open any time to check History, host it on Render, Railway or Fly.io:
@@ -52,6 +62,32 @@ If you'd like a permanent link that people can open any time to check History, h
 - Use start command `npm start`.
 - Set `ADMIN_PASSWORD` in the host's environment settings, since `.env` isn't uploaded.
 - Mount a disk and set `DATA_FILE` to a path on it, so data survives redeploys.
+
+### Hosting 24/7 on Fly.io
+
+[Fly.io](https://fly.io) runs the same server permanently at a fixed link (`https://<app>.fly.dev`) with the data on a volume. It costs roughly $6 a month for 1 GB of memory, which comfortably fits a 13-player algo day.
+
+**One-time setup:**
+```bash
+brew install flyctl
+fly auth login                                              # opens the browser
+fly apps create ascend-exchange                             # pick another name if taken (and update fly.toml)
+fly volumes create ascend_data --size 1 --region iad --yes
+fly secrets set ADMIN_PASSWORD='your-password' ALGO_DESIGN_B64="$(base64 -i algo/secret/competition.js)"
+fly deploy --ha=false                                       # one machine (the volume belongs to it)
+npm run migrate -- https://ascend-exchange.fly.dev         # copy this laptop's data/ to the server
+```
+
+**Keeping the secret design private:** the design isn't in the repo or the Docker image (`.dockerignore` excludes `algo/secret/`). It reaches the server only as the encrypted `ALGO_DESIGN_B64` secret.
+
+**After that:**
+- **Code changes:** `fly deploy`.
+- **Design changes:** run the `fly secrets set ALGO_DESIGN_B64=...` line again. The server restarts with the new design.
+- **Logs:** `fly logs`.
+- **Status:** `fly status`.
+- **More memory:** `fly scale memory 2048`.
+- **Backups:** Fly snapshots the volume daily. `npm run migrate` can also copy data to any server that's running.
+- **Admin work:** use the admin pages on the fly.dev link, such as **Generate data day**. The `npm run algo:*` tools only work on a local copy.
 
 ### For players: setting up your account
 
@@ -248,6 +284,9 @@ exchange/            game-agnostic core
   server.js          HTTP + Socket.IO, admin auth, broadcasting, persistence
   public/            trading UI (books, order entry, history, admin panels)
 games/smash/         Smash Bros binary options
+deploy/              restore route used by `npm run migrate`
+tools/               background mode (share:bg / link / stop) and migrate
+Dockerfile, fly.toml cloud deployment (Fly.io)
 ranking/             peer ranking for presentations: scoring.js (the math), store.js, server.js, public/
 algo/                algo competition: competition.js (products, prices, bots), matching.js, sim.js, runner.js + py/ (sandboxed Python), service.js, server.js, public/
 test/                engine, accounting, sessions, and end-to-end socket tests
