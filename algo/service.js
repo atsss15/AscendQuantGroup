@@ -1,8 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomInt } from 'node:crypto';
+import { randomInt, createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { simulateDay, toCsv, PRICE_COLUMNS } from './sim.js';
 import { startAgent } from './runner.js';
+import { zip } from './zip.js';
+
+const DATAMODEL = fileURLToPath(new URL('./py/datamodel.py', import.meta.url));
 
 export class AlgoError extends Error {}
 
@@ -18,6 +22,7 @@ const TRADE_COLUMNS = ['timestamp', 'buyer', 'seller', 'symbol', 'currency', 'pr
  *   days/<day>/own/<userId>.csv         each player's fills that day, with the counterparty named
  *   days/<day>/code/<userId>.py         the code that ran that day
  *   archive/<time>/                     everything from before the last "Start new round"
+ *   export/round_<n>_<key>.zip          every released day's public files in one download (rebuilt when days change)
  */
 export class AlgoService {
   constructor({ config, dir, names = (id) => id }) {
@@ -95,7 +100,8 @@ export class AlgoService {
    */
   async runDay({ practice = false } = {}) {
     if (this.running) throw new AlgoError(`Day ${this.running.day} is already running`);
-    const day = practice ? Math.min(1, ...this.state.days.map((d) => d.day)) - 1 : this.state.nextDay;
+    // data days count down from just before the first competition day: …, -2, -1, then Day 0 (or 1) is the first real day
+    const day = practice ? Math.min(this.state.nextDay, ...this.state.days.map((d) => d.day)) - 1 : this.state.nextDay;
     const seed = randomInt(1, 2 ** 31);
     const entries = practice ? [] : Object.entries(this.state.submissions).map(([userId, s]) => ({ userId, ...s }));
     this.running = { day, practice, progress: 0, startedAt: Date.now(), players: entries.length };
@@ -195,20 +201,25 @@ export class AlgoService {
 
   /**
    * Retire everything from the current round and start fresh: the state and day files move to
-   * archive/<time>/, then `dataDays` bots-only days are generated with the current design for players to study.
+   * archive/<time>/, then `dataDays` bots-only days (firstDay - dataDays … firstDay - 1) are generated with the
+   * current design for players to study, and the first competition day is `firstDay`.
    * Players keep the code in their editor; submissions, days, results and the leaderboard start over.
+   * A round that never had a competition day is redone under the same number.
    */
-  async newRound({ dataDays = 3 } = {}) {
+  async newRound({ dataDays = 3, firstDay = 0 } = {}) {
     if (this.running || this.preparing) throw new AlgoError('A simulation is running; try again when it finishes');
     this.preparing = { startedAt: Date.now(), dataDays, done: 0 };
     try {
-      const archive = path.join(this.dir, 'archive', new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-'));
+      const stamp = path.join(this.dir, 'archive', new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-'));
+      let archive = stamp;
+      for (let n = 2; fs.existsSync(archive); n++) archive = `${stamp}-${n}`;
       fs.mkdirSync(archive, { recursive: true });
       this.save();
       fs.copyFileSync(path.join(this.dir, 'state.json'), path.join(archive, 'state.json'));
       if (fs.existsSync(path.join(this.dir, 'days'))) fs.renameSync(path.join(this.dir, 'days'), path.join(archive, 'days'));
-      const { drafts, schedule, round } = this.state;
-      this.state = { ...freshState(), drafts, schedule: { ...schedule, lastRun: null }, round: (round ?? 0) + 1, practiceMode: false };
+      const { drafts, schedule, round = 0 } = this.state;
+      const started = this.state.days.some((d) => !d.practice);
+      this.state = { ...freshState(), drafts, schedule: { ...schedule, lastRun: null }, round: started || round === 0 ? round + 1 : round, practiceMode: false, nextDay: firstDay };
       this.save();
       for (let i = 0; i < dataDays; i++) {
         await this.runDay({ practice: true });
@@ -218,6 +229,34 @@ export class AlgoService {
     } finally {
       this.preparing = null;
     }
+  }
+
+  /** Every released day's public files (prices, trades, observations) in one zip; cached until the days change. */
+  async dataZip() {
+    const days = [...this.state.days].sort((a, b) => a.day - b.day);
+    if (!days.length) throw new AlgoError('No data released yet');
+    const round = this.state.round ?? 0;
+    const key = createHash('sha1').update(JSON.stringify(days.map((d) => [d.day, d.ranAt]))).digest('hex').slice(0, 10);
+    const exportDir = path.join(this.dir, 'export');
+    const file = path.join(exportDir, `round_${round}_${key}.zip`);
+    if (fs.existsSync(file)) return file;
+    this.zipping ??= (async () => {
+      const files = [];
+      for (const d of days) {
+        for (const kind of ['prices', 'trades', 'observations']) {
+          const full = path.join(this.dayDir(d.day), `${kind}.csv`);
+          if (fs.existsSync(full)) files.push({ name: `round_${round}/${kind}_round_${round}_day_${d.day}.csv`, data: fs.readFileSync(full) });
+        }
+      }
+      files.push({ name: `round_${round}/datamodel.py`, data: fs.readFileSync(DATAMODEL) });
+      const buf = await zip(files);
+      fs.rmSync(exportDir, { recursive: true, force: true }); // older zips
+      fs.mkdirSync(exportDir, { recursive: true });
+      fs.writeFileSync(`${file}.tmp`, buf);
+      fs.renameSync(`${file}.tmp`, file);
+      return file;
+    })().finally(() => (this.zipping = null));
+    return this.zipping;
   }
 
   // ---------------------------------------------------------------- schedule

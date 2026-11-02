@@ -1,35 +1,30 @@
 /**
- * Batch matching for a tick-based simulation. Everything that arrives in the same step is simultaneous,
- * so there is no time priority: orders are ranked by price, and orders at the same price share
- * fills pro-rata to their size.
+ * Batch matching for a tick-based simulation. Orders are ranked by price; at the same price they queue
+ * by `priority` (lower first): the sim gives bot quotes 0, since they were posted at the start of the tick,
+ * and each algorithm the CPU time its Trader.run took that tick, so faster code is earlier in the queue.
+ * Equal priorities are ordered at random (seeded, so a day replays exactly).
  *
- * Orders: { owner, symbol, price, qty }  qty > 0 buys, qty < 0 sells. `remaining` is tracked as a positive number.
+ * Orders: { owner, symbol, price, qty, priority? }  qty > 0 buys, qty < 0 sells. `remaining` is tracked as a positive number.
  * Trades: { symbol, price, qty, buyer, seller }
  */
 
-/**
- * Split `amount` (an integer) across `weights` in proportion, using largest remainders.
- * Ties on the remainder go to the order given by `tiebreak` (an array of indexes), so results are
- * deterministic for a given random seed.
- */
-export function proRata(amount, weights, tiebreak) {
-  const total = weights.reduce((a, b) => a + b, 0);
-  if (total === 0 || amount === 0) return weights.map(() => 0);
-  if (amount >= total) return [...weights];
-  const exact = weights.map((w) => (amount * w) / total);
-  const alloc = exact.map(Math.floor);
-  let left = amount - alloc.reduce((a, b) => a + b, 0);
-  const order = (tiebreak ?? weights.map((_, i) => i))
-    .slice()
-    .sort((a, b) => exact[b] - alloc[b] - (exact[a] - alloc[a]));
-  for (const i of order) {
-    if (left === 0) break;
-    if (alloc[i] < weights[i]) {
-      alloc[i]++;
-      left--;
-    }
+/** Orders in queue order: by priority, ties shuffled with `rng`. */
+export function queue(orders, rng) {
+  const shuffled = orders.slice();
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
   }
-  return alloc;
+  return shuffled.sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0));
+}
+
+/** Give `amount` to orders front to back, each up to what it has left. */
+function fillInOrder(amount, orders) {
+  return orders.map((o) => {
+    const q = Math.min(o.remaining, amount);
+    amount -= q;
+    return q;
+  });
 }
 
 /** Group orders by price; best price first for the given side ('buy': high first, 'sell': low first). */
@@ -72,8 +67,8 @@ function pairFills(symbol, price, buys, buyFills, sells, sellFills, trades) {
 /**
  * Incoming orders take liquidity from resting orders. Trades happen at the resting price.
  * Resting levels are consumed best first; at each level, the incoming orders willing to trade there
- * are served by price (most aggressive first) and pro-rata within the same limit price; the resting
- * orders at that level are filled pro-rata to their size.
+ * are served by price (most aggressive first), then in queue order; the resting orders at that level
+ * fill in queue order.
  */
 export function take(resting, incoming, rng, trades) {
   const symbol = resting[0]?.symbol ?? incoming[0]?.symbol;
@@ -86,23 +81,22 @@ export function take(resting, incoming, rng, trades) {
       const eligible = aggressors.filter((o) => o.remaining > 0 && (side === 'buy' ? o.price >= price : o.price <= price));
       if (!eligible.length) break;
       let supply = makers.reduce((s, o) => s + o.remaining, 0);
-      // price priority among aggressors, pro-rata within a limit price
-      const takerFills = new Map();
+      // price priority among aggressors, queue order within a limit price
+      const takers = [];
+      const takerFills = [];
       for (const [, group] of levels(eligible, side)) {
         if (supply === 0) break;
-        const want = group.reduce((s, o) => s + o.remaining, 0);
-        const amount = Math.min(want, supply);
-        const fills = proRata(amount, group.map((o) => o.remaining), shuffledIndexes(group.length, rng));
-        group.forEach((o, k) => takerFills.set(o, fills[k]));
-        supply -= amount;
+        const ordered = queue(group, rng);
+        const fills = fillInOrder(supply, ordered);
+        ordered.forEach((o, k) => fills[k] > 0 && (takers.push(o), takerFills.push(fills[k])));
+        supply -= fills.reduce((a, b) => a + b, 0);
       }
-      const filledTakers = [...takerFills.keys()].filter((o) => takerFills.get(o) > 0);
-      const total = filledTakers.reduce((s, o) => s + takerFills.get(o), 0);
+      const total = takerFills.reduce((a, b) => a + b, 0);
       if (!total) continue;
-      const makerFills = proRata(total, makers.map((o) => o.remaining), shuffledIndexes(makers.length, rng));
-      const tf = filledTakers.map((o) => takerFills.get(o));
-      if (side === 'buy') pairFills(symbol, price, filledTakers, tf, makers, makerFills, trades);
-      else pairFills(symbol, price, makers, makerFills, filledTakers, tf, trades);
+      const queued = queue(makers, rng);
+      const makerFills = fillInOrder(total, queued);
+      if (side === 'buy') pairFills(symbol, price, takers, takerFills, queued, makerFills, trades);
+      else pairFills(symbol, price, queued, makerFills, takers, takerFills, trades);
     }
   }
 }
@@ -110,7 +104,7 @@ export function take(resting, incoming, rng, trades) {
 /**
  * Uniform-price call auction among simultaneous orders that cross each other.
  * Price: the one that maximizes volume; ties go to the smallest imbalance, then closest to `reference`.
- * Allocation: price priority, pro-rata among orders at the marginal price.
+ * Allocation: price priority, then queue order among orders at the same price.
  */
 export function auction(orders, reference, rng, trades) {
   const buys = orders.filter((o) => o.qty > 0 && o.remaining > 0);
@@ -137,11 +131,10 @@ export function auction(orders, reference, rng, trades) {
     let left = volume;
     for (const [, group] of levels(list.filter((o) => (side === 'buy' ? o.price >= p : o.price <= p)), side)) {
       if (left === 0) break;
-      const want = group.reduce((s, o) => s + o.remaining, 0);
-      const amount = Math.min(want, left);
-      const f = proRata(amount, group.map((o) => o.remaining), shuffledIndexes(group.length, rng));
-      group.forEach((o, k) => f[k] && fills.set(o, f[k]));
-      left -= amount;
+      const ordered = queue(group, rng);
+      const f = fillInOrder(left, ordered);
+      ordered.forEach((o, k) => f[k] && fills.set(o, f[k]));
+      left -= f.reduce((a, b) => a + b, 0);
     }
     return fills;
   };
@@ -155,15 +148,6 @@ export function auction(orders, reference, rng, trades) {
 function compare(a, b) {
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] - b[i];
   return 0;
-}
-
-function shuffledIndexes(n, rng) {
-  const idx = Array.from({ length: n }, (_, i) => i);
-  for (let i = n - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    [idx[i], idx[j]] = [idx[j], idx[i]];
-  }
-  return idx;
 }
 
 /** Deterministic PRNG (mulberry32). */

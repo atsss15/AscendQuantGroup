@@ -17,8 +17,9 @@ export function pythonPath() {
 /**
  * Start a player's Trader in its own Python process (see py/host.py for the sandbox).
  *
- * run(state) resolves with { orders, traderData, logs, error }. A call slower than timeLimitMs counts as
- * no orders; a call that hangs past the hard limit, or a crash, stops the algorithm for the rest of the day.
+ * run(state) resolves with { orders, traderData, logs, error, cpuUs } (cpuUs: CPU time Trader.run used, in µs).
+ * A call slower than timeLimitMs counts as no orders; a call that hangs past the hard limit, or a crash, stops the
+ * algorithm for the rest of the day.
  */
 export async function startAgent({ name, code, timeLimitMs = 400, cpuSeconds = 300, startupMs = 20000 }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'algo-'));
@@ -115,9 +116,9 @@ export async function startAgent({ name, code, timeLimitMs = 400, cpuSeconds = 3
       const logs = startupLogs.length ? [...startupLogs, ...(reply.logs ?? [])] : reply.logs;
       startupLogs = [];
       if (reply.ms > timeLimitMs) {
-        return { orders: [], traderData: reply.traderData, logs, error: `Trader.run took ${reply.ms}ms (limit ${timeLimitMs}ms); orders ignored this tick` };
+        return { orders: [], traderData: reply.traderData, logs, error: `Trader.run took ${reply.ms}ms (limit ${timeLimitMs}ms); orders ignored this tick`, cpuUs: reply.cpu_us };
       }
-      return { orders: reply.orders, traderData: reply.traderData, logs, error: reply.error };
+      return { orders: reply.orders, traderData: reply.traderData, logs, error: reply.error, cpuUs: reply.cpu_us };
     },
     close,
   };

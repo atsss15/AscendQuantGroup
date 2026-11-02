@@ -217,7 +217,8 @@
     fill($('#bt-output'), 
       h('div', { class: 'toolbar' },
         h('span', { class: `pnl-big ${cls(r.pnl)}` }, signed(r.pnl)),
-        h('span', { class: 'muted' }, `P&L on ${dayLabel(store.me.days.find((d) => d.day === r.day) ?? { day: r.day })} · ran in ${r.seconds.toFixed(1)}s`)),
+        h('span', { class: 'muted' }, `P&L on ${dayLabel(store.me.days.find((d) => d.day === r.day) ?? { day: r.day })} · ran in ${r.seconds.toFixed(1)}s`),
+        r.speed ? h('span', { class: 'muted', title: 'CPU time per Trader.run call. At the same price, faster algorithms are earlier in the queue.' }, ` · Trader.run CPU ${r.speed.avgMs.toFixed(2)}ms avg, ${r.speed.maxMs.toFixed(1)}ms max`) : ''),
       table(['product', 'P&L', 'end position', 'volume'], products, '', [1, 2, 3]),
       r.rejected ? h('p', { class: 'muted small' }, `${r.rejected} order batches were rejected for breaking position limits.`) : '',
       counterparties(r),
@@ -393,6 +394,7 @@
       h('a', { href: fileUrl(`/days/${day}/trades.csv`) }, 'trades.csv'),
       obs ? h('a', { href: fileUrl(`/days/${day}/observations.csv`) }, 'observations.csv') : '',
       info?.entered ? h('a', { href: fileUrl(`/days/${day}/own.csv`) }, 'my trades.csv') : '',
+      h('a', { href: fileUrl('/data.zip'), title: 'prices, trades and features for every released day' }, 'all days (zip)'),
     );
     const tabs = [...Object.keys(data), ...(obs ? [FEATURES] : [])];
     if (!tabs.includes(store.md.product)) store.md.product = tabs[0];
@@ -561,9 +563,12 @@
       }
     };
     const newRound = async () => {
-      if (!confirm('Start a new round?\n\nThis retires everything from the current round: days, results, the leaderboard and everyone’s submissions move to an archive on the server. Then 3 new data days are generated with the current design. Players keep the code in their editors.\n\nSet the schedule’s start date to give players time to research.')) return;
+      const answer = prompt('Start a new round?\n\nThis retires everything from the current round: days, results, the leaderboard and everyone’s submissions move to an archive on the server. Then new data days are generated with the current design, and the first real day is Day 0. Players keep the code in their editors. Set the schedule’s start date to give players time to research.\n\nHow many data days (bots only, 10,000 ticks each)?', '14');
+      if (answer == null) return;
+      const dataDays = Number(answer);
+      if (!Number.isInteger(dataDays) || dataDays < 1 || dataDays > 30) return toast('Pick 1 to 30 data days', 'error');
       try {
-        await api('POST', '/admin/new-round', { dataDays: 3 });
+        await api('POST', '/admin/new-round', { dataDays, firstDay: 0 });
         toast('New round started: generating data days');
         pollAdmin();
       } catch (err) {
@@ -682,7 +687,8 @@
       h('p', {}, 'Write a ', h('code', {}, 'Trader'), ' class with a ', h('code', {}, 'run(self, state)'), ' method, the same interface as IMC Prosperity. It is called every tick with a ', h('code', {}, 'TradingState'),
         ' (order depths, your position, your fills and the market\'s trades since last tick) and returns ', h('code', {}, '(orders_by_product, conversions, traderData)'), '.'),
       h('p', {}, `A day has ${me.ticks} ticks. Position limits: ${limits}. If your orders for a product could take you past its limit, all of them are rejected for that tick. Each call must finish within ${me.timeLimitMs}ms.`),
-      h('p', {}, 'Matching: every algorithm acts on the same snapshot at the same time. Your orders first trade against the bots\' quotes (best price first, then shared pro-rata with everyone at the same price), orders that cross other players clear in a batch auction, and what\'s left can be hit by taker bots. All orders are cancelled at the end of the tick.'),
+      h('p', {}, 'Matching: every algorithm acts on the same snapshot at the same time. Your orders first trade against the bots\' quotes (best price first), orders that cross other players clear in a batch auction, and what\'s left can be hit by taker bots. All orders are cancelled at the end of the tick.'),
+      h('p', {}, 'Queue at the same price: the bots\' quotes come first (they were posted at the start of the tick), then algorithms in order of the CPU time their ', h('code', {}, 'Trader.run'), ' used that tick, fastest first. Backtests show your CPU time per call. To get ahead of slower players, be faster or improve the price.'),
       h('p', {}, me.schedule?.enabled
         ? `A new day runs automatically every day at ${when(me.schedule.nextRunAt, me.schedule.timeZone).replace(/^.*, /, '')} with everyone's latest submission trading against the bots and each other. Your submission keeps running each day until you submit a new one.`
         : 'Each day the admin simulates a new day with everyone\'s latest submission trading against the bots and each other.',

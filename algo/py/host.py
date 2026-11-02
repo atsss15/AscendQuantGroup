@@ -2,7 +2,8 @@
 Runs one player's Trader in a separate process.
 
 Protocol: the first line on stdin is {"code": ..., "cpuSeconds": ...}. Then one JSON TradingState per line;
-for each, one JSON reply line goes to file descriptor 3: {"orders": [...], "traderData": str, "logs": [...], "error": str|null}.
+for each, one JSON reply line goes to file descriptor 3: {"orders": [...], "traderData": str, "logs": [...], "error": str|null, "cpu_us": int}.
+cpu_us is the CPU time Trader.run used; at the same price, faster algorithms are earlier in the queue.
 Anything the player prints is captured into "logs".
 
 Sandbox (defence in depth, not a security boundary): the process starts with a clean environment and a temp
@@ -17,9 +18,11 @@ import os
 import resource
 import sys
 import sysconfig
+import time
 import traceback
 
 RUNTIME_DIR = os.path.dirname(os.path.abspath(__file__))
+cpu_ns = time.process_time_ns  # kept here, so a player's code can't swap it out
 sys.path.insert(0, RUNTIME_DIR)
 proto = os.fdopen(3, "w", buffering=1)
 
@@ -109,15 +112,18 @@ def main():
         sys.stderr = out
         error = None
         orders, trader_data = [], msg.get("traderData", "")
+        started = cpu_ns()
         try:
             result = trader.run(state)
+            used = cpu_ns() - started
             orders, trader_data = unpack(result, trader_data)
         except Exception:
+            used = cpu_ns() - started
             error = short_traceback()
         finally:
             sys.stdout = sys.__stdout__
             sys.stderr = sys.__stderr__
-        reply({"orders": orders, "traderData": trader_data, "logs": lines(out.getvalue()), "error": error})
+        reply({"orders": orders, "traderData": trader_data, "logs": lines(out.getvalue()), "error": error, "cpu_us": used // 1000})
 
 
 def depth(d):

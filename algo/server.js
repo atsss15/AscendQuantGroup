@@ -48,6 +48,13 @@ export function attachAlgo(server, { config, dir = path.resolve('data', 'algo'),
     if (!['prices', 'trades', 'observations', 'own'].includes(kind)) return res.status(404).end();
     sendFile(res, () => service.dataFile(req.params.day, kind, req.user.id), `${kind === 'own' ? 'my_trades' : kind}_day_${req.params.day}.csv`);
   });
+  api.get('/data.zip', async (req, res) => {
+    try {
+      res.download(await service.dataZip(), `ascend_algo_round_${service.state.round ?? 0}_data.zip`);
+    } catch (err) {
+      res.status(404).json({ error: err.message });
+    }
+  });
   api.get('/days/:day/log.txt', (req, res) => sendFile(res, () => service.dataFile(req.params.day, 'log', req.user.id), `my_log_day_${req.params.day}.txt`));
 
   // admin
@@ -68,7 +75,8 @@ export function attachAlgo(server, { config, dir = path.resolve('data', 'algo'),
     // archives the current round and generates fresh data days in the background; the page polls for progress
     if (service.running || service.preparing) throw new AlgoError('A simulation is running; try again when it finishes');
     service.lastError = null;
-    service.newRound({ dataDays: Math.min(Math.max(Number(req.body?.dataDays ?? 3), 1), 5) }).catch((err) => {
+    const dataDays = Math.min(Math.max(Math.round(Number(req.body?.dataDays) || 3), 1), 30);
+    service.newRound({ dataDays, firstDay: Number.isInteger(req.body?.firstDay) ? req.body.firstDay : 0 }).catch((err) => {
       service.lastError = err.message;
       if (!(err instanceof AlgoError)) console.error('[algo new round]', err);
     });

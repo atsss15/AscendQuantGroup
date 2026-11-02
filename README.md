@@ -144,7 +144,7 @@ This is an IMC Prosperity-style competition on the same server and link. Players
 
 **Running it:**
 
-1. **Start new round…** (admin panel) retires the current round: days, results, the leaderboard and submissions move to `data/algo/archive/<time>/` on the server, and 3 fresh data days are generated with the current design. Players keep the code in their editors. Data days run the bots only; players get their prices, trades and features to study and backtest on (3 × 10,000 ticks).
+1. **Start new round…** (admin panel) retires the current round: days, results, the leaderboard and submissions move to `data/algo/archive/<time>/` on the server. It then generates fresh data days with the current design (it asks how many, default 14 = two weeks, numbered −14 to −1), and the first real day is Day 0. Players keep the code in their editors. Data days run the bots only; players get their prices, trades and features to study and backtest on, one day at a time or all at once with **all days (zip)**.
 2. **Schedule:** tick **Run automatically every day at 12:00** and pick a start date. Leaving a gap after a new round gives players time to research. The day then runs by itself every day at that time (New York time), with every player's latest submission, and releases the results and that day's data right away. The page shows players when the next run is. A server that was down at the scheduled time catches up later the same day.
 3. **Run Day N now** runs a day immediately instead. **Delete this day** removes a bad run so you can run it again.
 4. **Practice week:** while that admin checkbox is on, days run and show standings but don't count toward the cumulative leaderboard (a new round turns it off). Each day also has a **Count this day** / **Make it practice** toggle.
@@ -163,10 +163,12 @@ This is an IMC Prosperity-style competition on the same server and link. Players
 
 1. Bots post quotes.
 2. Every algorithm gets the same `TradingState` and replies at the same time. Orders that could break a product's position limit are all rejected for that product.
-3. Algorithm orders take liquidity from bot quotes: best price first, then shared **pro-rata** at each price, since everything in a tick arrives at once.
+3. Algorithm orders take liquidity from bot quotes, best price first.
 4. Algorithm orders that cross each other clear in a uniform-price batch auction.
 5. Taker bots trade against whatever rests.
 6. Everything is cancelled. Algorithms see their own fills (with the counterparty) and the market's anonymous trades next tick.
+
+**Queue at the same price** ([algo/matching.js](algo/matching.js)): bot quotes come first, since they're posted at the start of the tick. Algorithms follow in order of the CPU time their `Trader.run` used that tick, fastest first. CPU time is measured inside the player's own Python process, so it isn't affected by how busy the server is. Ties are broken at random with the day's seed. Backtests report each algorithm's CPU time per call.
 
 At the end of the day, positions are marked at fair value. Each day has its own seed, so backtests replay exactly the same prices and bot quotes.
 

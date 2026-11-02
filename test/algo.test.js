@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { proRata, take, auction, makeRng } from '../algo/matching.js';
+import { queue, take, auction, makeRng } from '../algo/matching.js';
 import { simulateDay } from '../algo/sim.js';
 import { startAgent } from '../algo/runner.js';
 import { AlgoService, zoned, zonedToUtc } from '../algo/service.js';
@@ -15,32 +15,34 @@ import { platform } from '../server.js';
 const order = (owner, price, qty) => ({ owner, symbol: 'X', price, qty, remaining: Math.abs(qty) });
 const small = { ...competition, ticks: 300 };
 
-test('pro-rata splits by size and always adds up', () => {
-  assert.deepEqual(proRata(10, [6, 4, 10]), [3, 2, 5]);
-  assert.deepEqual(proRata(25, [6, 4, 10]), [6, 4, 10], 'never more than asked');
-  const odd = proRata(7, [5, 5, 5]);
-  assert.equal(odd.reduce((a, b) => a + b, 0), 7);
-  assert.ok(odd.every((x) => x === 2 || x === 3));
+test('queue: lower priority first, ties in a seeded random order', () => {
+  const orders = [{ id: 'c', priority: 30 }, { id: 'a', priority: 0 }, { id: 'b', priority: 10 }];
+  assert.deepEqual(queue(orders, makeRng(1)).map((o) => o.id), ['a', 'b', 'c']);
+  const ties = [{ id: 'x', priority: 5 }, { id: 'y', priority: 5 }, { id: 'z', priority: 5 }];
+  assert.deepEqual(queue(ties, makeRng(7)).map((o) => o.id), queue(ties, makeRng(7)).map((o) => o.id), 'same seed, same order');
 });
 
-test('takers share a resting level pro-rata; better-priced takers fill first', () => {
+test('same price: bot quotes fill first, then faster algorithms; better prices beat speed', () => {
   const rng = makeRng(1);
   const trades = [];
-  const resting = [order('bot', 100, -10), order('bot', 101, -10)];
-  const a = order('A', 100, 10);
-  const b = order('B', 100, 30);
-  take(resting, [a, b], rng, trades);
-  assert.equal(a.qty - a.remaining, 3, 'A gets 10 × 10/40, rounded');
-  assert.equal(b.qty - b.remaining, 7);
+  const bot = { ...order('bot', 100, -10), priority: 0 };
+  const fast = { ...order('F', 100, -10), priority: 50 };
+  const slow = { ...order('S', 100, -10), priority: 900 };
+  take([slow, fast, bot], [order('T', 100, 15)], rng, trades);
+  assert.equal(bot.remaining, 0, 'the bot quoted first');
+  assert.equal(fast.remaining, 5, 'then the faster algorithm');
+  assert.equal(slow.remaining, 10, 'the slowest gets nothing');
   assert.ok(trades.every((t) => t.price === 100));
 
   const trades2 = [];
-  const resting2 = [order('bot', 100, -10)];
-  const eager = order('E', 105, 10);
-  const meek = order('M', 100, 10);
-  take(resting2, [meek, eager], rng, trades2);
-  assert.equal(eager.remaining, 0, 'price priority among takers');
-  assert.equal(meek.remaining, 10);
+  const resting = [{ ...order('bot', 100, -10), priority: 0 }];
+  const quick = { ...order('Q', 100, 10), priority: 5 };
+  const lazy = { ...order('L', 100, 10), priority: 500 };
+  const eager = { ...order('E', 105, 4), priority: 9000 };
+  take(resting, [lazy, quick, eager], rng, trades2);
+  assert.equal(eager.remaining, 0, 'a better limit price goes first, however slow');
+  assert.equal(quick.remaining, 4, 'then the faster of the two at the same limit');
+  assert.equal(lazy.remaining, 10);
   assert.equal(trades2[0].price, 100, 'trades at the resting price');
 });
 
@@ -54,6 +56,37 @@ test('players crossing each other clear in one batch auction', () => {
   assert.ok(trades.every((t) => t.price === price));
   assert.ok(price >= 99 && price <= 102);
   assert.equal(sell1.remaining, 0, 'cheaper seller fills first');
+
+  const trades2 = [];
+  const fast = { ...order('F', 100, -3), priority: 10 };
+  const slow = { ...order('S', 100, -3), priority: 99 };
+  auction([{ ...order('B', 100, 4), priority: 1 }, slow, fast], 100, makeRng(3), trades2);
+  assert.equal(fast.remaining, 0, 'at the same price the faster seller fills first');
+  assert.equal(slow.remaining, 2);
+});
+
+test('a slow Trader.run loses the queue to a fast one at the same price', { timeout: 30000 }, async () => {
+  const quote = (busy) => `
+from datamodel import Order
+class Trader:
+    def run(self, state):
+        ${busy ? 'x = sum(i * i for i in range(60000))' : 'pass'}
+        d = state.order_depths["STABLE"]
+        bid = max(d.buy_orders) + 1
+        if state.position.get("STABLE", 0) > 30:
+            return {}, 0, ""
+        return {"STABLE": [Order("STABLE", bid, 8)]}, 0, ""
+`;
+  const fast = await startAgent({ name: 'fast', code: quote(false), timeLimitMs: 2000 });
+  const slow = await startAgent({ name: 'slow', code: quote(true), timeLimitMs: 2000 });
+  const res = await simulateDay({ config: { ...small, ticks: 150 }, day: 1, seed: 11, agents: [fast, slow] });
+  fast.close();
+  slow.close();
+  const f = res.results.fast;
+  const s = res.results.slow;
+  assert.ok(f.speed.avgMs < s.speed.avgMs, 'speeds are measured');
+  assert.ok(f.byProduct.STABLE.volume > 0, 'the fast one is filled');
+  assert.ok(s.byProduct.STABLE.volume < f.byProduct.STABLE.volume / 3, 'the slow one only gets what the fast one could not take');
 });
 
 test('a backtest replays the same prices and bot quotes as the real day', async () => {
@@ -223,9 +256,9 @@ test('new round: archives everything, keeps editors, generates fresh data days',
   await svc.runDay();
   svc.setSchedule({ enabled: true, startDate: '2026-11-04' });
   const res = await svc.newRound({ dataDays: 2 });
-  assert.deepEqual(res.dataDays, [-1, 0]);
+  assert.deepEqual(res.dataDays, [-2, -1], 'data days lead up to Day 0');
   assert.equal(svc.state.round, 1, 'the first new round after setup is round 1');
-  assert.equal(svc.state.nextDay, 1);
+  assert.equal(svc.state.nextDay, 0, 'the first real day is Day 0');
   assert.equal(svc.state.practiceMode, false);
   assert.deepEqual(svc.state.submissions, {}, 'old submissions are retired');
   assert.equal(svc.leaderboard((id) => id).length, 0);
@@ -234,6 +267,15 @@ test('new round: archives everything, keeps editors, generates fresh data days',
   const archived = JSON.parse(fs.readFileSync(path.join(res.archived, 'state.json'), 'utf8'));
   assert.equal(archived.days[0].day, 1);
   assert.ok(fs.existsSync(path.join(res.archived, 'days', '1', 'prices.csv')));
+
+  const redo = await svc.newRound({ dataDays: 3 });
+  assert.equal(svc.state.round, 1, 'a round that never ran a day is redone under the same number');
+  assert.deepEqual(redo.dataDays, [-3, -2, -1]);
+  const file = await svc.dataZip();
+  assert.match(path.basename(file), /^round_1_\w+\.zip$/);
+  const raw = fs.readFileSync(file).toString('latin1');
+  assert.ok(raw.includes('round_1/prices_round_1_day_-3.csv') && raw.includes('round_1/datamodel.py'), 'files are named by round and day');
+  assert.equal(await svc.dataZip(), file, 'cached until the days change');
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

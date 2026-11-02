@@ -7,8 +7,10 @@ import { take, auction, makeRng } from './matching.js';
  *   1. The price model moves; maker bots post quotes (the resting book).
  *   2. Every algorithm gets the same snapshot (Prosperity-style TradingState) and answers at once.
  *      Orders that would break a product's position limit are all rejected for that product.
- *   3. Algorithm orders take liquidity from the bot quotes (price priority, pro-rata at each price).
+ *   3. Algorithm orders take liquidity from the bot quotes (price priority; at the same price, faster algorithms first).
  *   4. Algorithm orders that cross each other clear in a uniform-price batch auction.
+ *      Queue at a price: bot quotes first (posted at the start of the tick), then algorithms in order of the CPU
+ *      time their Trader.run took this tick. Ties are broken at random.
  *   5. What's left rests in the book; taker bots trade against bot quotes and algorithm orders alike.
  *   6. Everything is cancelled. Algorithms see their fills and the market's trades next tick.
  *      On their own fills they see who was on the other side (a player's name or a bot's id);
@@ -40,7 +42,7 @@ export async function simulateDay({ config, day, seed, agents = [], record = tru
   const agentNames = new Set(agents.map((a) => a.name));
   const labels = new Map(agents.map((a) => [a.name, a.label ?? a.name]));
   const labelOf = (owner) => labels.get(owner) ?? owner; // bots go by their id
-  const agentState = new Map(agents.map((a) => [a.name, { traderData: '', ownTrades: emptyBySymbol(symbols), marketTrades: emptyBySymbol(symbols), fills: [], logs: [], errors: new Map(), rejected: 0 }]));
+  const agentState = new Map(agents.map((a) => [a.name, { traderData: '', ownTrades: emptyBySymbol(symbols), marketTrades: emptyBySymbol(symbols), fills: [], logs: [], errors: new Map(), rejected: 0, cpu: { total: 0, max: 0, n: 0 } }]));
   // repeated errors are grouped: first occurrence + count
   const addError = (st, timestamp, msg) => {
     const key = String(msg).trim().split('\n').at(-1).replace(/\(position -?\d+\)/, '');
@@ -95,7 +97,14 @@ export async function simulateDay({ config, day, seed, agents = [], record = tru
       if (typeof reply.traderData === 'string') st.traderData = reply.traderData.slice(0, 50000);
       if (reply.logs) st.logs.push(...[].concat(reply.logs).map((l) => `[${timestamp}] ${l}`));
       if (reply.error) addError(st, timestamp, reply.error);
-      const orders = normalize(reply.orders ?? [], a.name, symbols, (msg) => addError(st, timestamp, msg));
+      if (Number.isFinite(reply.cpuUs)) {
+        st.cpu.total += reply.cpuUs;
+        st.cpu.max = Math.max(st.cpu.max, reply.cpuUs);
+        st.cpu.n++;
+      }
+      // faster code queues earlier at the same price (bot quotes have priority 0)
+      const priority = 1 + (Number.isFinite(reply.cpuUs) ? reply.cpuUs : 1e9);
+      const orders = normalize(reply.orders ?? [], a.name, symbols, (msg) => addError(st, timestamp, msg)).map((o) => ({ ...o, priority }));
       for (const s of symbols) {
         const mine = orders.filter((o) => o.symbol === s);
         if (!mine.length) continue;
@@ -174,7 +183,8 @@ export async function simulateDay({ config, day, seed, agents = [], record = tru
       total += pnl;
     }
     const errors = [...st.errors.values()].map((e) => `[${e.timestamp}] ${e.msg}${e.count > 1 ? `\n    (happened ${e.count} times; first shown)` : ''}`);
-    results[a.name] = { pnl: round2(total), byProduct, errors, logs: st.logs.slice(-200), rejected: st.rejected, fills: st.fills };
+    const speed = st.cpu.n ? { avgMs: round2(st.cpu.total / st.cpu.n / 1000), maxMs: round2(st.cpu.max / 1000) } : null; // Trader.run CPU time
+    results[a.name] = { pnl: round2(total), byProduct, errors, logs: st.logs.slice(-200), rejected: st.rejected, fills: st.fills, speed };
   }
   // the bots' own books, for checking a design (never shown to players)
   const bots = {};
@@ -201,7 +211,7 @@ function normalize(orders, owner, symbols, warn, bot = !warn) {
       warn?.(`${symbol}: order needs an integer price and a non-zero integer quantity (got ${o?.price}, ${o?.quantity ?? o?.qty})`);
       continue;
     }
-    out.push({ owner, symbol, price, qty, remaining: Math.abs(qty), agent: !bot, ...(bot && typeof o.match === 'function' ? { match: o.match } : {}) });
+    out.push({ owner, symbol, price, qty, remaining: Math.abs(qty), agent: !bot, priority: 0, ...(bot && typeof o.match === 'function' ? { match: o.match } : {}) });
   }
   return out;
 }
