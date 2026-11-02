@@ -218,7 +218,7 @@
       h('div', { class: 'toolbar' },
         h('span', { class: `pnl-big ${cls(r.pnl)}` }, signed(r.pnl)),
         h('span', { class: 'muted' }, `P&L on ${dayLabel(store.me.days.find((d) => d.day === r.day) ?? { day: r.day })} · ran in ${r.seconds.toFixed(1)}s`),
-        r.speed ? h('span', { class: 'muted', title: 'CPU time per Trader.run call. At the same price, faster algorithms are earlier in the queue.' }, ` · Trader.run CPU ${r.speed.avgMs.toFixed(2)}ms avg, ${r.speed.maxMs.toFixed(1)}ms max`) : ''),
+        r.speed ? h('span', { class: 'muted', title: 'CPU time per Trader.run call. At the same price, faster algorithms are earlier in the queue.' }, ` · Trader.run CPU ${r.speed.avgMs.toFixed(3)}ms avg, ${r.speed.maxMs.toFixed(3)}ms max`) : ''),
       table(['product', 'P&L', 'end position', 'volume'], products, '', [1, 2, 3]),
       r.rejected ? h('p', { class: 'muted small' }, `${r.rejected} order batches were rejected for breaking position limits.`) : '',
       counterparties(r),
