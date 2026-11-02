@@ -224,7 +224,7 @@ test('new round: archives everything, keeps editors, generates fresh data days',
   svc.setSchedule({ enabled: true, startDate: '2026-11-04' });
   const res = await svc.newRound({ dataDays: 2 });
   assert.deepEqual(res.dataDays, [-1, 0]);
-  assert.equal(svc.state.round, 2);
+  assert.equal(svc.state.round, 1, 'the first new round after setup is round 1');
   assert.equal(svc.state.nextDay, 1);
   assert.equal(svc.state.practiceMode, false);
   assert.deepEqual(svc.state.submissions, {}, 'old submissions are retired');

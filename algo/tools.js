@@ -30,7 +30,7 @@ function exportData(service) {
   const out = path.join(dir, 'export', 'AscendAlgo_data');
   fs.rmSync(path.join(dir, 'export'), { recursive: true, force: true });
   fs.mkdirSync(out, { recursive: true });
-  const round = service.state.round ?? 1;
+  const round = service.state.round ?? 0;
   for (const d of days) {
     for (const kind of ['prices', 'trades', 'observations']) {
       let file;

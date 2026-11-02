@@ -340,7 +340,7 @@ export class AlgoService {
       nextDay: this.state.nextDay,
       deadline: this.state.deadline,
       practiceMode: this.state.practiceMode !== false,
-      round: this.state.round ?? 1,
+      round: this.state.round ?? 0,
       schedule: this.scheduleView(),
       running: this.running && { day: this.running.day, practice: this.running.practice, progress: this.running.progress },
       preparing: this.preparing && { dataDays: this.preparing.dataDays, done: this.preparing.done },
@@ -396,7 +396,7 @@ function freshState() {
     nextDay: 1,
     deadline: '',
     practiceMode: true, // practice week: days run normally but don't count toward the cumulative leaderboard
-    round: 1,
+    round: 0, // the setup/practice round; each "Start new round" adds one
     schedule: { enabled: false, time: '12:00', timeZone: 'America/New_York', startDate: null, lastRun: null },
   };
 }
