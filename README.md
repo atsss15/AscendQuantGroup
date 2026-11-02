@@ -1,252 +1,232 @@
 # AscendQuantGroup
-Trading games and tools for Emory Ascend Quant Group
 
-## Ascend Exchange
+Trading games and tools for Emory Ascend Quant Group. One server runs three apps:
 
-A real-time trading platform for game nights. Every market has a live central limit order book: players post bids and asks, or hit the bid / lift the offer, using their chips.
+| App | Link | What it is |
+|---|---|---|
+| **Algo trading competition** | `/algo` | IMC Prosperity-style: players write Python trading bots that trade a simulated market every day |
+| **Ascend Exchange** | `/` and `/admin` | A live order-book exchange for in-person game nights (e.g. trading Smash Bros outcomes) |
+| **Peer ranking** | `/rank` | Strategy-proof peer grading for presentations |
 
-- **Accounts** are permanent. Each person has a password, a chip balance and a dollar-wager balance that carry over from one game night to the next.
-- **Sessions:** each game night is a session that runs one trading game (Smash Bros for now). Its markets, trades and P&L are kept for good.
-- **History tab:** anyone can sign in at any time to see their chips, every past session, and their trades and P&L in each one.
+It runs 24/7 at **https://ascend-exchange.fly.dev**. Everyone uses that one link, and it's the only copy of the data.
 
-### Starting it (host)
+---
 
-**One-time setup** on the computer that runs it:
+## Algo trading competition (`/algo`)
 
-1. Install [Node.js](https://nodejs.org) 22.9 or newer, plus Cloudflare's tunnel tool: `brew install cloudflared`.
-2. Get the code and install it:
-   ```bash
-   git clone https://github.com/atsss15/AscendQuantGroup.git
-   cd AscendQuantGroup
-   npm install
-   ```
-3. Create a file called `.env` in the project folder containing your admin password:
-   ```
-   ADMIN_PASSWORD=your-password-here
-   ```
-   This is also the password for the **Attis** account, which is the admin account. `.env` is git-ignored, so the password never goes to GitHub. `.env.example` shows the format.
+Players sign in with their exchange account and write a Python `Trader` with the same interface as IMC Prosperity. They backtest it in the browser and submit it. Every day at a set time a new day is simulated: every player's latest submission trades against market-making and taker bots, and against the other players. Results, a cumulative leaderboard and that day's market data are then released.
 
-**Each game night:**
+### For players
 
-1. Start the server:
-   ```bash
-   cd AscendQuantGroup
-   npm run share
-   ```
-   It prints:
-   ```
-     ================ Share these links ================
-     Players:  https://some-random-words.trycloudflare.com
-     Admin:    https://some-random-words.trycloudflare.com/admin
-   ```
-2. Send the **Players** link to everyone. Open it yourself, sign in as **Attis**, and press **Admin**.
-3. Under **Session**, give the night a name, pick the game, and press **Start session**.
-4. Run the game. For Smash: list matches, and settle each one when it's over.
-5. At the end of the night, press **End session**. It moves to everyone's History tab. Settle (or delete) any match people still hold positions in first.
-6. Press `Ctrl+C` in the terminal to stop the server. Everything is saved in `data/ascend.json` and loaded again next time.
+1. **Sign in** at `/algo` (see [Accounts](#accounts)).
+2. **Write your trader** in the editor. It autosaves and starts from a commented sample `trader.py` that shows every input: order book levels, position limits, published features, your fills with counterparties, the market's trades, and saving memory between ticks with `traderData`.
+3. **Study the data.** Under **Market data**:
+   - A price chart, and an order book you can scrub tick by tick.
+   - A **Weather & features** tab.
+   - Per-day downloads of `prices.csv`, `trades.csv` and `observations.csv` (Prosperity's format), or **all days (zip)** for everything at once.
+4. **Backtest.** **Run backtest** replays a released day's prices and bots with only your algorithm trading, and shows:
+   - P&L by product, errors and your prints.
+   - Your `Trader.run` CPU time per call.
+   - **Who you traded with**, with a CSV download of your fills.
+5. **Submit.** Your latest submission runs at the next scheduled day (shown at the top of the page) and every day after until you submit again.
+6. **Results** shows your P&L per day, your trades and log for each day, the latest day's standings, and the leaderboard with a chart of everyone's cumulative P&L.
 
-**Keep it running without a Terminal window:**
+What your code gets each tick, and the rules:
 
-| Command | What it does |
-|---|---|
-| `npm run share:bg` | Starts the server and public link in the background. Closing Terminal won't stop it, and it keeps the Mac awake while it runs. |
-| `npm run link` | Shows the current links at any time. |
-| `npm run stop` | Stops it, saving first. |
+- **`state.order_depths`:** the bots' quotes, several levels deep.
+- **`state.position`:** your positions. **Position limits:** if your orders for a product could take you past its limit, *all* of them are rejected for that tick.
+- **`state.own_trades`:** your fills since last tick. The other side is named (another player's name, or a bot id); you are `SUBMISSION`.
+- **`state.market_trades`:** everyone else's trades. Anonymous.
+- **`state.observations.plainValueObservations`:** features published this tick (numbers, and a few categories as text), if the round has any.
+- **`state.traderData`:** whatever string you returned last tick (up to 50,000 characters).
+- **Time limit:** each call must finish within 400 ms, or its orders are ignored. A call that hangs stops your algorithm for the day.
+- **Libraries:** numpy, pandas, math, statistics, json, jsonpickle, collections and similar standard helpers. Files, network and system access are disabled.
 
-The log is in `data/server.log`. The link still changes whenever the server restarts, and nothing runs while the Mac is shut down or its lid is closed on battery.
+### Running a round (admin)
 
-Each time you run `npm run share` you get a new link. If everyone is on the same Wi‑Fi, `npm start` is enough: it prints a `Same Wi-Fi` link and doesn't use the tunnel.
+Sign in as Attis. The admin panel appears at the top of `/algo`.
 
-If you'd like a permanent link that people can open any time to check History, host it on Render, Railway or Fly.io:
+1. **Start new round…**
+   - **Archives the old round:** days, results, the leaderboard and submissions move to `data/algo/archive/<time>/` on the server.
+   - **Generates data days:** it asks how many (default 14, i.e. two weeks), numbered −14 to −1. These are bots-only days for players to study and backtest on, generated with the current design.
+   - **Day 0:** the first real day.
+   - **Round numbering:** a round that never ran a day is redone under the same number.
+2. **Schedule.** Tick **Run automatically every day at 12:00** (New York time) and pick a start date.
+   - A gap of a couple of days after a new round gives players time to research.
+   - After that, each day runs by itself and releases its results and data right away.
+   - A server that was down at the scheduled time catches up later that day.
+3. **Reset everyone's editor to the template…** puts the round's sample `trader.py` in every editor. Everyone's previous code is saved to `data/algo/archive/editors-<time>.json` first.
+4. **Other controls:**
+   - **Run Day N now** runs a day immediately.
+   - **Generate data day** adds another bots-only day.
+   - **Delete this day** removes a bad run so it can run again.
+   - The **practice week** checkbox (off after a new round) and each day's **Count this day** toggle decide what counts toward the leaderboard.
+   - The panel also shows every submission and each day's results, code and logs, plus the [hosting cost](#hosting-247-on-flyio).
 
-- Use start command `npm start`.
-- Set `ADMIN_PASSWORD` in the host's environment settings, since `.env` isn't uploaded.
-- Mount a disk and set `DATA_FILE` to a path on it, so data survives redeploys.
+### How a day is simulated
 
-### Hosting 24/7 on Fly.io
+Each day is 10,000 ticks. Each tick ([algo/sim.js](algo/sim.js)):
 
-[Fly.io](https://fly.io) runs the same server permanently at a fixed link (`https://<app>.fly.dev`) with the data on a volume. It costs roughly $6 a month for 1 GB of memory, which comfortably fits a 13-player algo day.
+1. The price model moves and maker bots post quotes.
+2. Every algorithm gets the same `TradingState` and replies at the same time, in its own Python process.
+3. Algorithm orders take liquidity from the bot quotes, best price first.
+4. Algorithm orders that cross each other clear in a uniform-price batch auction.
+5. Taker bots trade against whatever rests, bots and players alike.
+6. Everything is cancelled. Next tick, algorithms see their own fills (with counterparties) and the market's anonymous trades.
 
-**One-time setup:**
+**Queue at the same price** ([algo/matching.js](algo/matching.js)) works like this:
+
+- **Order:** bot quotes come first, since they're posted at the start of the tick. Algorithms follow in order of the CPU time their `Trader.run` used that tick, fastest first.
+- **Fairness:** CPU time is measured with the thread CPU clock inside the player's own process, so it isn't affected by how busy the server is.
+- **Ties:** broken at random with the day's seed.
+
+So both price and code efficiency matter.
+
+At the end of the day, positions are marked at fair value. Prices, bots and matching each use their own seeded random stream, so a backtest replays a day's prices and bot behaviour exactly.
+
+### Designing a round (kept secret)
+
+The real design lives in `algo/secret/competition.js`. That folder is git-ignored, and the server gets the design only as an encrypted Fly secret, because players can read this repo. Without it, the server falls back to the public placeholder [algo/competition.example.js](algo/competition.example.js). Keep a private backup of the secret folder.
+
+A design file defines:
+
+- **products:** each with a position limit.
+- **model:** fair values each tick, and optionally `observations(t)` for the features published to players.
+- **bots:** `quote()` for makers and `take()` for takers. A bot's `name` is the id players see when they trade with it.
+- **settings:** ticks per day, the per-call time limit, and the sample `template`.
+
+Designs are validated privately before a round goes live. Naive analysis of the data players get has to find little out of sample, while each intended signal has to add significant P&L when traded on unseen days.
+
+**Player code safety:** each algorithm runs in its own Python process ([algo/py/host.py](algo/py/host.py)) with:
+- a clean environment and a temp folder
+- CPU-time and file-size limits
+- an import allowlist
+- a hook that blocks file access, network, subprocesses and similar operations
+
+That's solid for a club competition, but it isn't a hardened sandbox.
+
+**Offline tools** (local copy only, with the server stopped):
+- `npm run algo:setup` creates `.venv/` with numpy, pandas and jsonpickle.
+- `npm run algo:reset-data` regenerates data days.
+- `npm run algo:export` zips every released day.
+
+---
+
+## Hosting 24/7 on Fly.io
+
+[Fly.io](https://fly.io) runs the server permanently at a fixed link, with the data on a 1 GB volume. It's one shared-CPU machine with 1 GB of memory, about $6 a month. A 13-player algo day runs in seconds.
+
+**One-time setup** (already done for `ascend-exchange`):
+
 ```bash
 brew install flyctl
 fly auth login                                              # opens the browser
 fly apps create ascend-exchange                             # pick another name if taken (and update fly.toml)
 fly volumes create ascend_data --size 1 --region iad --yes
-fly secrets set ADMIN_PASSWORD='your-password' ALGO_DESIGN_B64="$(base64 -i algo/secret/competition.js)"
+fly secrets set ADMIN_PASSWORD='your-password' ALGO_DESIGN_B64="$(base64 -i algo/secret/competition.js | tr -d '\n')"
 fly deploy --ha=false                                       # one machine (the volume belongs to it)
-npm run migrate -- https://ascend-exchange.fly.dev         # copy this laptop's data/ to the server
+npm run migrate -- https://ascend-exchange.fly.dev         # copy a laptop's data/ to the server
 ```
 
-**Keeping the secret design private:** the design isn't in the repo or the Docker image (`.dockerignore` excludes `algo/secret/`). It reaches the server only as the encrypted `ALGO_DESIGN_B64` secret.
+The design isn't in the repo or the Docker image (`.dockerignore` excludes `algo/secret/`). It reaches the server only as the encrypted `ALGO_DESIGN_B64` secret.
 
-**After that:**
-- **Code changes:** `fly deploy`.
-- **Design changes:** run the `fly secrets set ALGO_DESIGN_B64=...` line again. The server restarts with the new design. For a new round with new products, then press **Start new round…** on the algo admin panel.
-- **Logs:** `fly logs`.
-- **Status:** `fly status`.
-- **More memory:** `fly scale memory 2048`.
-- **Cost:** the algo admin panel shows an estimate of this month's Fly bill so far. It's worked out from the machine size, the volume and Fly's list prices, and links to the exact bill on the dashboard. For billing status and data transfer as well, give the server a read-only token: `fly secrets set FLY_API_TOKEN="$(fly tokens create readonly personal --expiry 8760h)"`.
-- **Backups:** Fly snapshots the volume daily. `npm run migrate` can also copy data to any server that's running.
-- **Admin work:** use the admin pages on the fly.dev link, such as **Start new round…** and the run schedule. The `npm run algo:*` tools only work on a local copy.
+**Day to day:**
 
-### For players: setting up your account
+- **Code changes:** `fly deploy --ha=false`. If Fly's builder answers 401, run it again or add `--depot=false`.
+- **New round or design change:**
+  1. Run `fly secrets set ALGO_DESIGN_B64="$(base64 -i algo/secret/competition.js | tr -d '\n')"`.
+  2. Deploy.
+  3. Press **Start new round…** and **Reset everyone's editor…** on `/algo`, then set the schedule.
+- **Cost:** the algo admin panel shows this month's Fly cost so far and per month. It's estimated from the machine size, the volume and Fly's list prices, and links to the exact bill.
+  - For billing status and data transfer too, give the server a read-only token: `fly secrets set FLY_API_TOKEN="$(fly tokens create readonly personal --expiry 8760h)"`.
+- **Logs and status:** `fly logs`, `fly status`. **More memory:** `fly scale memory 2048`.
+- **Backups:** Fly snapshots the volume daily. `npm run migrate -- <url>` copies a local `data/` folder to a running server, replacing its data.
 
-1. Open the link you were sent.
-2. Pick your name from the **Who are you?** list.
-3. **First time only:** type any password you want (4 or more characters) and press **Sign in**. That becomes your password, so remember it.
-4. Next time, sign in with the same password. The browser also remembers you, so refreshing keeps you signed in.
-5. If you forget your password, ask Attis to reset it. Then sign in again and choose a new one.
+### Running on your own computer
 
-Once you're in:
+Use this for development, or for a game night without the cloud. It keeps its own separate `data/`, so don't run it alongside the Fly server for real use.
 
-- **Trade tab** (while a session is running):
+1. Install [Node.js](https://nodejs.org) 22.9 or newer, plus `brew install cloudflared` for public links.
+2. Run `git clone https://github.com/atsss15/AscendQuantGroup.git && cd AscendQuantGroup && npm install && npm run algo:setup`.
+3. Create `.env` containing `ADMIN_PASSWORD=your-password-here`. It's git-ignored, and `.env.example` shows the format.
+4. Start it:
+   - `npm start` gives local and same-Wi-Fi links.
+   - `npm run share` adds a temporary public trycloudflare link.
+   - `npm run share:bg` / `npm run link` / `npm run stop` run it in the background, so closing the Terminal doesn't stop it. The log is in `data/server.log`.
+
+---
+
+## Accounts
+
+All three apps share the exchange's accounts, except ranking, which uses names.
+
+- **Who can sign in:** the list is in [server.js](server.js). It currently holds Ashley, Paul, Frank, Jay, Thomas, Attis, Susie, Derrick, Arien, Buju, Jerry, Harry and Carl. Nobody else can sign in. Add accounts in the exchange admin panel or in `server.js`.
+- **First sign-in:** pick your name and type any password (4+ characters). That becomes your password. The browser remembers you, and signing in on `/algo` or `/` signs you in on both.
+- **Forgot your password:** ask Attis to **Reset password**, then sign in again with a new one.
+- **Admin:** Attis is the admin account. Its password is always `ADMIN_PASSWORD`. `/admin` also has a plain admin-password login.
+
+---
+
+## Ascend Exchange: in-person game nights (`/` and `/admin`)
+
+A real-time trading platform for game nights. Every market has a live central limit order book: players post bids and asks, or hit the bid / lift the offer, using their chips.
+
+- **Accounts** keep a chip balance and a dollar-wager balance from one game night to the next.
+- **Sessions:** each game night is a session that runs one trading game (Smash Bros for now). Its markets, trades and P&L are kept for good.
+- **History tab:** anyone can sign in at any time to see their chips, every past session, and their trades and P&L in each.
+
+**Running a game night:**
+
+1. Open `/admin` on the live link and sign in as Attis.
+2. Under **Session**, name the night, pick the game, and press **Start session**.
+3. Run the game. For Smash: list matches, and settle each one when it's over.
+4. At the end, settle (or delete) any market people still hold, then press **End session**. It moves to everyone's History.
+
+**For players:**
+
+- **Trade tab** (while a session runs):
   - Every contract shows a live order book.
-  - **Hit / Lift** trade immediately against the best bid / ask.
-  - **Bid / Ask** post a limit order at the price you type. Clicking a price in the book fills it in.
+  - **Hit / Lift** trade immediately against the best bid or ask.
+  - **Bid / Ask** post a limit order at your price. Clicking a price in the book fills it in.
 - **Top bar:**
-  - **chips:** your balance.
-  - **equity:** chips plus your open positions.
+  - **chips** and **equity** (chips plus your open positions).
   - **session P&L** and **all-time** P&L.
-  - **available:** how many chips you can still risk.
-  - **wagers:** your money wagers, if you have any.
+  - **available:** chips you can still risk.
+  - **wagers:** your money wagers, if any.
 - **History tab:** your chips and all-time P&L. For every session: your P&L, how each contract settled, your trades, and that night's leaderboard.
 
-### Admin guide
+**Admin guide:**
 
-- **Sessions:** the **Session** panel starts and ends game nights. Game-specific panels, like **Smash matches**, only appear while a session of that game is running.
-- **Deleting markets:**
-  - **Delete** on a contract, or on a match (in its header or in the Smash panel), removes it at any time, even after trades or settlement.
-  - Every trade in it is cancelled and everyone's chips go back to what they were before it existed. It also disappears from History.
-- **Editing chips and wagers:**
-  - In **Accounts**, click a player's **chips** or **wagers $** number to edit it. `Enter` saves and `Esc` cancels.
+- **Sessions:** the **Session** panel starts and ends game nights. Game panels like **Smash matches** only appear during that game's sessions.
+- **Deleting markets:** **Delete** on a contract or match removes it at any time, even after trades or settlement. Every trade in it is reversed and everyone's chips go back to what they were, and it disappears from History.
+- **Chips and wagers:** in **Accounts**, click a player's **chips** or **wagers $** to edit (`Enter` saves, `Esc` cancels).
   - A chip change counts as a deposit, not trading P&L.
-  - A wager change is recorded as an "Adjusted by admin" entry.
-- **Recording wagers ($):** this tracks real money, separately from chips. In the **Wagers** panel, record an entry with a note: positive if they won or are owed, negative if they lost or owe.
+  - A wager change is recorded as "Adjusted by admin".
+- **Wagers ($)** track real money, separately from chips. Record entries in the **Wagers** panel: positive if they won or are owed, negative if they lost or owe.
   - **Settle up** lists open balances.
-  - Press **mark paid** once the money changes hands.
-  - Use ✕ to delete a mistaken entry.
+  - **mark paid** records that the money changed hands.
+  - ✕ deletes a mistaken entry.
   - Each player sees only their own wagers.
-- **Accounts:**
-  - The list is in [server.js](server.js): Ashley, Paul, Frank, Jay, Thomas, Attis, Susie, Derrick, Arien, Buju, Jerry, Harry and Carl. Nobody else can sign in.
-  - Add accounts in the panel, or add names to the list in `server.js`.
-  - **Reset password** lets someone choose a new password.
-- **Admin account:**
-  - Attis is listed in `admins`. Its password is always `ADMIN_PASSWORD`. To change it, edit `.env` and restart.
-  - The `/admin` link also has a plain admin-password login.
+- **Quiz equity** is tracked separately from game-night equity, and total equity is the sum of both.
 
-### Algo trading competition (`/algo`)
-
-This is an IMC Prosperity-style competition on the same server and link. Players sign in with their exchange accounts and write a Python `Trader`. Every day a new day is simulated, automatically at a set time, in which all submitted algorithms trade against the bots and each other.
-
-**One-time setup:** run `npm run algo:setup`. It creates a project-local Python (`.venv/`, git-ignored) with numpy, pandas and jsonpickle for player code.
-
-**Links:** `npm run share` prints `<link>/algo`. Players and you use the same page, and your admin controls appear when you're signed in as Attis.
-
-**Running it:**
-
-1. **Start new round…** (admin panel) retires the current round: days, results, the leaderboard and submissions move to `data/algo/archive/<time>/` on the server. It then generates fresh data days with the current design (it asks how many, default 14 = two weeks, numbered −14 to −1), and the first real day is Day 0. Players keep the code in their editors. Data days run the bots only; players get their prices, trades and features to study and backtest on, one day at a time or all at once with **all days (zip)**.
-2. **Schedule:** tick **Run automatically every day at 12:00** and pick a start date. Leaving a gap after a new round gives players time to research. The day then runs by itself every day at that time (New York time), with every player's latest submission, and releases the results and that day's data right away. The page shows players when the next run is. A server that was down at the scheduled time catches up later the same day.
-3. **Reset everyone's editor to the template…** puts the design's starting `trader.py` (a commented sample of every input) into every player's editor. Their previous code is saved to `data/algo/archive/editors-<time>.json` first.
-4. **Run Day N now** runs a day immediately instead. **Delete this day** removes a bad run so you can run it again.
-5. **Practice week:** while that admin checkbox is on, days run and show standings but don't count toward the cumulative leaderboard (a new round turns it off). Each day also has a **Count this day** / **Make it practice** toggle.
-
-**What players get:**
-
-- **Editor:** a Python editor with autosave, starting from a Prosperity-compatible template (`from datamodel import Order, TradingState, ...`).
-- **Run backtest:** replays a released day's prices and bots with only their algorithm and reports P&L by product, errors and their prints. Building a full backtester on the downloaded data is up to them.
-- **Submit:** their latest submission is what runs in the next day.
-- **Results:** P&L per day, a cumulative leaderboard with a chart of everyone's cumulative P&L, and their own trades and log for each day.
-- **Market data:** a price chart, an order book they can scrub tick by tick, a chart of each published feature, and downloads of `prices.csv` / `trades.csv` / `observations.csv` in Prosperity's format.
-- **Features:** if the design publishes any (e.g. weather), each tick's values arrive in `state.observations.plainValueObservations`, numbers and a few text categories.
-- **Counterparties:** on their own fills (`state.own_trades`, their trades CSV, backtest fills) the other side is named: another player's name or a bot's id. They are `SUBMISSION`. Everyone else's trades are anonymous.
-
-**Each tick** ([algo/sim.js](algo/sim.js)):
-
-1. Bots post quotes.
-2. Every algorithm gets the same `TradingState` and replies at the same time. Orders that could break a product's position limit are all rejected for that product.
-3. Algorithm orders take liquidity from bot quotes, best price first.
-4. Algorithm orders that cross each other clear in a uniform-price batch auction.
-5. Taker bots trade against whatever rests.
-6. Everything is cancelled. Algorithms see their own fills (with the counterparty) and the market's anonymous trades next tick.
-
-**Queue at the same price** ([algo/matching.js](algo/matching.js)): bot quotes come first, since they're posted at the start of the tick. Algorithms follow in order of the CPU time their `Trader.run` used that tick, fastest first. CPU time is measured inside the player's own Python process, so it isn't affected by how busy the server is. Ties are broken at random with the day's seed. Backtests report each algorithm's CPU time per call.
-
-At the end of the day, positions are marked at fair value. Each day has its own seed, so backtests replay exactly the same prices and bot quotes.
-
-**Designing the game (kept secret):** the real design goes in `algo/secret/competition.js`. That folder is git-ignored, so the design never reaches GitHub. The server uses it whenever it exists, and otherwise falls back to the public placeholder in [algo/competition.example.js](algo/competition.example.js). Keep a private backup of the secret file, because it isn't in the repo. A design file defines:
-
-- **products:** each with a position limit.
-- **price model:** produces fair values each tick, and optionally `observations(t)`: features published to players each tick.
-- **bots:** `quote()` for makers and `take()` for takers. A bot's `name` is the id players see when they trade with it.
-- **settings:** ticks per day, the per-call time limit, and the player template.
-
-**Player code safety:** each algorithm runs in its own Python process ([algo/py/host.py](algo/py/host.py)) with a clean environment, a CPU-time cap, an import allowlist, and a hook that blocks file access, network, subprocesses and similar operations. That's solid for a club competition, but it isn't a hardened sandbox. For strangers, run the server inside a container.
-
-### Peer ranking for presentations (`/rank`)
-
-This is a separate app that runs on the same server and link. Raters rank every group's presentation in each rubric category, and the grades are designed so that ranking honestly is the best strategy. It has its own data file, `data/ranking.json`, and doesn't touch accounts or chips.
-
-**Links** (printed by `npm run share` along with the exchange links):
-
-- Raters: `<link>/rank`
-- Organizer: `<link>/rank/admin` (log in with `ADMIN_PASSWORD`)
-
-**Running a presentation day:**
-
-1. Open `/rank/admin` and create an evaluation. It needs:
-   - a name
-   - the groups, one per line
-   - optionally, a roster of `Name, Group` lines
-   - the rubric, which is pre-filled with the 6 categories and weights
-   - the presentation share of the grade (default 90%)
-2. Choose how raters sign in:
-   - **With a roster:** only listed names can sign in, and their group is fixed. Leave the group off for raters who aren't presenting.
-   - **Without a roster:** raters type any name and pick their group.
-3. Press **Open ranking** and share the rater link. The **Raters** table shows who has submitted, and who on the roster hasn't signed in yet.
-4. When everyone is done, press **Close ranking**. **Publish results** shows each rater the group standings, their own agreement score and their own grade. **Download CSV** exports everything.
-
-**For raters:**
-
-- Sign in with your name.
-- For each category, tap the groups from best to worst. You never rank your own group.
-- Move between categories freely. **Copy order from…** reuses the previous category's order, and **↑ ↓ ✕** adjust it. Drafts stay on your phone, even after a refresh.
-- Nothing is sent until you press **Submit rankings**, which unlocks once every category is ranked. You can change things and submit again until the organizer closes ranking.
-- A name stays tied to the first device that uses it. If someone switches phones, use **reset sign-in** in the admin page. Their submitted rankings are kept.
-
-**Erasing test submissions:** in `/rank/admin`, **remove** deletes one rater and their rankings. **Clear all rankings** erases every rater and submission but keeps the groups and rubric.
-
-**How grades are computed** (see [ranking/scoring.js](ranking/scoring.js)):
-
-| | |
-|---|---|
-| Presentation score P | In a ranking of m groups, position r (1 = best) is worth (m − r)/(m − 1), so first = 1 and last = 0. P is averaged over raters, then weighted by the rubric. Raters never rank their own group, so nothing they submit can change their own group's P. |
-| Agreement score A | For each pair of groups a rater ordered, their order is compared with every other rater who ordered the same pair, excluding teammates. A is the share of those comparisons that agree, weighted by the rubric. Categories a rater didn't rank count as 0. |
-| Group grade | 100 × (0.9 P + 0.1 × the average A of the group's members who ranked). |
-| Individual grade | 100 × (0.9 × their group's P + 0.1 × their own A). Raters who aren't presenting just get A. |
-
-If everyone shares the same view of which presentation was better, honest ranking is a strict best response: changing your ranking can't raise your group's P and can only lower your A. This mechanism has limits:
-
-- **Collusion:** a whole class coordinating on some other order (e.g. alphabetical) would also be "agreed on".
-- **Taste:** on subjective categories, the agreement score rewards predicting what others think, not just your own taste.
-
-The 90/10 split keeps that part small. You can change it under **Edit setup**.
-
-### How it works
+### How the exchange works
 
 | | |
 |---|---|
 | Matching | Price-time priority. Trades happen at the resting order's price. Self-trades are prevented by cancelling your own resting order. |
-| Orders | `GTC` limit orders rest on the book. Hit/Lift sends an `IOC` at the current best price, and any unfilled part is cancelled. |
-| Accounting | Trades move chips directly: equity = chips + position × mark, and P&L = equity − deposits (starting chips plus admin changes). The mark is the last trade, clamped to the current bid/ask. On settlement every position is paid out at the settlement price. Session P&L adds up the cash flows and open positions in that session's markets. |
-| Risk | An order must be covered by your chips in its worst case: buys settle at the min, sells at the max, and all resting orders are assumed to fill. `maxPosition` per market counts resting orders as if they had filled. `maxOrderQty` caps the size of a single order. |
-| Sessions | Only one session runs at a time. Ending a session cancels resting orders. Markets that never traded are dropped, unsettled markets with no positions are marked closed, and a session where nothing happened isn't kept. |
-| Persistence | Everything is saved to `data/ascend.json` (or `DATA_FILE`) about a second after each change, and the full trade history is kept. Older `data/smash.json` saves are imported automatically, with their markets put in "Session 1". |
-| Identity | Passwords are hashed with scrypt. Signing in stores a session token in the browser, so a refresh brings you back. A password reset signs that account out everywhere. |
+| Orders | `GTC` limit orders rest on the book. Hit/Lift sends an `IOC` at the current best price; any unfilled part is cancelled. |
+| Accounting | Trades move chips directly: equity = chips + position × mark, and P&L = equity − deposits (starting chips plus admin changes). The mark is the last trade, clamped to the current bid/ask. On settlement every position is paid out at the settlement price. |
+| Risk | An order must be covered by your chips in its worst case: buys settle at the min, sells at the max, and all resting orders are assumed to fill. `maxPosition` counts resting orders as filled; `maxOrderQty` caps a single order. |
+| Sessions | One session at a time. Ending a session cancels resting orders. Markets that never traded are dropped, and a session where nothing happened isn't kept. |
+| Persistence | Saved to `data/ascend.json` (or `DATA_FILE`) about a second after each change, with the full trade history. |
+| Identity | Passwords are hashed with scrypt. Signing in stores a session token in the browser. A password reset signs that account out everywhere. |
 
 ### Smash Bros (`games/smash`)
 
-During a Smash session, use **Smash matches** to list a match: give it an optional name and 2–8 players. Each player gets a contract that settles at **100 if they win, 0 otherwise**. **Halt all** on the match header pauses trading. When the match is over, pick the winner and press **Settle**. **Rematch** lists the same players again.
+During a Smash session, use **Smash matches** to list a match with an optional name and 2–8 players. Each player gets a contract that settles at **100 if they win, 0 otherwise**.
+- **Halt all** pauses trading.
+- When the match is over, pick the winner and press **Settle**.
+- **Rematch** lists the same players again.
 
 ### Adding a game
 
@@ -272,28 +252,89 @@ export const dice = {
 
 Then add it to `games: [smash, dice]` in `server.js`, and it appears in the **Start session** picker.
 
-Every session also gets these built-in admin tools: start or end a session, manage accounts (add an account, edit chips or wagers, reset a password), list a market, halt or resume a market or match, settle at any price, delete a market or match, and cancel orders.
+Every session also gets these built-in admin tools:
+- start or end a session
+- manage accounts: add an account, edit chips or wagers, reset a password
+- list a market
+- halt or resume a market or match
+- settle at any price
+- delete a market or match
+- cancel orders
 
 In the browser, game scripts use `window.Exchange`:
-
-- `registerAdminPanel({ title, gameId, mount(el), update(state) })`, where `gameId` shows the panel only during that game's sessions
+- `registerAdminPanel({ title, gameId, mount(el), update(state) })`
 - `admin(cmd, args)`
-- `h(tag, props, ...children)` (a small DOM helper)
+- `h(tag, props, ...children)`
 - `toast(msg)`
 - `state` and `me`
 
+---
+
+## Peer ranking for presentations (`/rank`)
+
+Raters rank every group's presentation in each rubric category, and the grades are designed so that ranking honestly is the best strategy. It has its own data file, `data/ranking.json`, and doesn't touch accounts or chips.
+
+**Links:** raters use `/rank`. The organizer uses `/rank/admin` (log in with `ADMIN_PASSWORD`).
+
+**Running a presentation day:**
+
+1. In `/rank/admin`, create an evaluation. It needs:
+   - a name
+   - the groups, one per line
+   - optionally, a roster of `Name, Group` lines
+   - the rubric, pre-filled with 6 categories and weights
+   - the presentation share of the grade (default 90%)
+2. Choose how raters sign in:
+   - **With a roster:** only listed names can sign in, and their group is fixed. Leave the group off for raters who aren't presenting.
+   - **Without a roster:** raters type a name and pick their group, or None.
+3. Press **Open ranking** and share the rater link. The **Raters** table shows who has submitted.
+4. When everyone is done, press **Close ranking**.
+   - **Publish results** shows each rater the standings, their agreement score and their grade.
+   - **Download CSV** exports everything.
+
+**For raters:**
+
+- **Ranking:** for each category, tap the groups from best to worst. You never rank your own group.
+- **Moving around:** switch between categories freely. **Copy order from…** reuses another category's order, and **↑ ↓ ✕** adjust it. Drafts stay on your phone.
+- **Submitting:** nothing is sent until you press **Submit rankings**, which unlocks once every category is ranked. You can resubmit until the organizer closes ranking.
+- **Devices:** a name stays tied to the first device that uses it. The organizer can **reset sign-in** for someone who switches phones.
+
+**Erasing test submissions:** **remove** deletes one rater and their rankings. **Clear all rankings** erases every rater and submission but keeps the setup.
+
+**How grades are computed** ([ranking/scoring.js](ranking/scoring.js)):
+
+| | |
+|---|---|
+| Presentation score P | In a ranking of m groups, position r (1 = best) is worth (m − r)/(m − 1). P is averaged over raters, then weighted by the rubric. Raters never rank their own group, so nothing they submit changes their own group's P. |
+| Agreement score A | For each pair of groups a rater ordered, their order is compared with every other rater who ordered the same pair (excluding teammates). A is the share that agree, weighted by the rubric. |
+| Group grade | 100 × (0.9 P + 0.1 × the average A of the group's members who ranked). |
+| Individual grade | 100 × (0.9 × their group's P + 0.1 × their own A). Raters who aren't presenting just get A. |
+
+If everyone shares the same view of which presentation was better, honest ranking is a strict best response: changing your ranking can't raise your group's P and can only lower your A. This mechanism has two limits:
+- **Collusion:** a whole class coordinating on some other order would also count as "agreed on".
+- **Taste:** on subjective categories, the agreement score rewards predicting what others think.
+
+The 90/10 split keeps that part small.
+
+---
+
+## Project layout
+
 ```
-server.js            Ascend Exchange platform: settings, accounts, admins, games (+ mounts /rank)
-exchange/            game-agnostic core
-  orderbook.js       matching engine (one book per market)
-  exchange.js        accounts, sessions, markets, chips, P&L, wagers, history, save/load
-  server.js          HTTP + Socket.IO, admin auth, broadcasting, persistence
-  public/            trading UI (books, order entry, history, admin panels)
+server.js            platform settings (accounts, admins, games); mounts /algo and /rank
+algo/                algo competition
+  sim.js             one simulated day: ticks, bots, players, settlement
+  matching.js        batch matching: price priority, speed queue, call auction
+  runner.js, py/     sandboxed Python players (host.py) and the Prosperity datamodel
+  service.js         rounds, data days, submissions, backtests, schedule, leaderboard
+  server.js          /algo/api routes; public/ is the page
+  competition.js     loads the secret design (or competition.example.js)
+  zip.js, tools.js   all-days zip; offline data tools
+exchange/            game-night exchange core: orderbook.js, exchange.js, server.js, public/
 games/smash/         Smash Bros binary options
-deploy/              restore route used by `npm run migrate`
+ranking/             peer ranking: scoring.js (the math), store.js, server.js, public/
+deploy/              restore (for npm run migrate) and hosting-cost estimate
 tools/               background mode (share:bg / link / stop) and migrate
-Dockerfile, fly.toml cloud deployment (Fly.io)
-ranking/             peer ranking for presentations: scoring.js (the math), store.js, server.js, public/
-algo/                algo competition: competition.js (products, prices, bots), matching.js, sim.js, runner.js + py/ (sandboxed Python), service.js, server.js, public/
-test/                engine, accounting, sessions, and end-to-end socket tests
+Dockerfile, fly.toml Fly.io deployment
+test/                matching, simulation, schedule, rounds, exchange, ranking and end-to-end tests
 ```
