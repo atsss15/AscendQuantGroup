@@ -6,7 +6,8 @@
  *
  *   products: [{ symbol, limit }]               limit = max absolute position
  *   ticks, tickStep                              ticks per day; timestamps go 0, tickStep, 2·tickStep, …
- *   model.create({ rng, day, ticks, products })  → { step(t) → { [symbol]: fairValue }, observations?(t) }
+ *   model.create({ rng, day, ticks, products, carry })  → { step(t) → { [symbol]: fairValue }, observations?(t), carry?() }
+ *     carry: what the previous day's carry() returned (null on a round's first day), so days join up into one series
  *   bots: [{ name, quote?(ctx), take?(ctx) }]  (a take order may add match(restingOrder) → boolean; resting orders have .agent)
  *     quote(ctx) → orders resting in the book before algorithms act (market makers)
  *     take(ctx)  → orders sent after algorithms act; they trade against everything resting (takers)
@@ -35,10 +36,10 @@ export const competition = {
   ],
 
   model: {
-    create({ rng, day, ticks }) {
+    create({ rng, day, ticks, carry }) {
       const gauss = () => Math.sqrt(-2 * Math.log(1 - rng())) * Math.cos(2 * Math.PI * rng());
-      let stable = 1000;
-      let under = 10000 * Math.exp(0.02 * gauss());
+      let stable = carry?.stable ?? 1000;
+      let under = carry?.under ?? 10000 * Math.exp(0.02 * gauss());
       const vol = 0.0008; // per tick
       return {
         step(t) {
@@ -52,6 +53,7 @@ export const competition = {
           };
         },
         observations: () => ({}),
+        carry: () => ({ stable, under }), // where this day ended; the next day starts here
       };
     },
   },

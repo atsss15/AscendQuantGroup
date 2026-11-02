@@ -19,6 +19,7 @@ const TRADE_COLUMNS = ['timestamp', 'buyer', 'seller', 'symbol', 'currency', 'pr
  *   state.json                         drafts, latest submissions, day metadata and results, schedule
  *   days/<day>/prices.csv, trades.csv  released market data (Prosperity format)
  *   days/<day>/observations.csv         the features published each tick (weather and the like), if the design has any
+ *   days/<day>/world.json               the market's state at the start and end of the day: each day continues the last
  *   days/<day>/own/<userId>.csv         each player's fills that day, with the counterparty named
  *   days/<day>/code/<userId>.py         the code that ran that day
  *   archive/<time>/                     everything from before the last "Start new round"
@@ -83,7 +84,7 @@ export class AlgoService {
     const agent = await startAgent({ name: userId, code: checkCode(code), timeLimitMs: this.config.timeLimitMs });
     try {
       const started = Date.now();
-      const res = await simulateDay({ config: this.config, day: d.day, seed: d.seed, agents: [agent], record: false, options: { kind: d.practice ? 'data' : 'competition' } });
+      const res = await simulateDay({ config: this.config, day: d.day, seed: d.seed, agents: [agent], record: false, carry: this.worldState(d.day)?.in ?? null });
       // fills: [timestamp, product, signed quantity, price, counterparty]
       return { day: d.day, seconds: (Date.now() - started) / 1000, ...res.results[userId] };
     } finally {
@@ -98,10 +99,12 @@ export class AlgoService {
    * Simulate the next day. Practice days run the bots only (data for players to study);
    * competition days run every player's latest submission against the bots and each other.
    */
-  async runDay({ practice = false } = {}) {
+  async runDay({ practice = false, day: requested } = {}) {
     if (this.running) throw new AlgoError(`Day ${this.running.day} is already running`);
-    // data days count down from just before the first competition day: …, -2, -1, then Day 0 (or 1) is the first real day
-    const day = practice ? Math.min(this.state.nextDay, ...this.state.days.map((d) => d.day)) - 1 : this.state.nextDay;
+    // data days sit before the first competition day (…, -2, -1, then Day 0 or 1); an extra data day goes before the earliest
+    const day = practice ? requested ?? Math.min(this.state.nextDay, ...this.state.days.map((d) => d.day)) - 1 : this.state.nextDay;
+    // continue from where the previous day ended (a round's first day starts fresh)
+    const carry = this.worldState(day - 1)?.out ?? null;
     const seed = randomInt(1, 2 ** 31);
     const entries = practice ? [] : Object.entries(this.state.submissions).map(([userId, s]) => ({ userId, ...s }));
     this.running = { day, practice, progress: 0, startedAt: Date.now(), players: entries.length };
@@ -113,10 +116,11 @@ export class AlgoService {
         day,
         seed,
         agents,
-        options: { kind: practice ? 'data' : 'competition' },
+        carry,
         onProgress: (p) => (this.running.progress = p),
       });
       this.writeDayFiles(day, res, entries);
+      if (res.carry) fs.writeFileSync(path.join(this.dayDir(day), 'world.json'), JSON.stringify({ in: carry, out: res.carry }));
       const record = {
         day,
         practice, // a data day: bots only, released for players to study
@@ -169,6 +173,12 @@ export class AlgoService {
       const r = res.results[e.userId];
       fs.writeFileSync(path.join(dir, 'own', `${e.userId}.log`), [...(r?.errors ?? []), ...(r?.logs ?? [])].join('\n'));
     }
+  }
+
+  /** The market's state at the start (`in`) and end (`out`) of a day, if that day exists. */
+  worldState(day) {
+    const file = path.join(this.dayDir(day), 'world.json');
+    return this.state.days.some((d) => d.day === day) && fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null;
   }
 
   deleteDay(day) {
@@ -235,8 +245,9 @@ export class AlgoService {
       const started = this.state.days.some((d) => !d.practice);
       this.state = { ...freshState(), drafts, schedule: { ...schedule, lastRun: null }, round: started || round === 0 ? round + 1 : round, practiceMode: false, nextDay: firstDay };
       this.save();
+      // oldest first, so each data day continues the one before and Day 0 continues the last of them
       for (let i = 0; i < dataDays; i++) {
-        await this.runDay({ practice: true });
+        await this.runDay({ practice: true, day: firstDay - dataDays + i });
         this.preparing.done = i + 1;
       }
       return { round: this.state.round, archived: archive, dataDays: this.state.days.map((d) => d.day) };

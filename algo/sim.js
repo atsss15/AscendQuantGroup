@@ -24,14 +24,16 @@ import { take, auction, makeRng } from './matching.js';
  * @param {Array<{name: string, label?: string, run: (state) => Promise<{orders?, traderData?, logs?, error?}>}>} opts.agents
  *                               label: the name other players see as their counterparty (defaults to name)
  * @param {boolean} [opts.record] keep the full price/trade record (for data files)
+ * @param {object} [opts.carry]  the state the previous day ended in, so this day continues the same series
+ *                               (returned as `carry` at the end of each day, if the design supports it)
  */
-export async function simulateDay({ config, day, seed, agents = [], record = true, options = {}, onProgress }) {
+export async function simulateDay({ config, day, seed, agents = [], record = true, options = {}, carry = null, onProgress }) {
   // separate random streams, so bots and prices replay identically whatever the algorithms do
   const botRng = makeRng(seed ^ 0x85ebca6b);
   const matchRng = makeRng(seed ^ 0xc2b2ae35);
   const symbols = config.products.map((p) => p.symbol);
   const limits = Object.fromEntries(config.products.map((p) => [p.symbol, p.limit]));
-  const world = config.model.create({ rng: makeRng(seed ^ 0x9e3779b9), day, ticks: config.ticks, products: config.products, options });
+  const world = config.model.create({ rng: makeRng(seed ^ 0x9e3779b9), day, ticks: config.ticks, products: config.products, options, carry });
 
   const accounts = new Map(); // owner -> { cash: {sym}, pos: {sym}, volume: {sym} }
   const account = (owner) => {
@@ -194,7 +196,7 @@ export async function simulateDay({ config, day, seed, agents = [], record = tru
     const byProduct = Object.fromEntries(symbols.map((s) => [s, round2(acc.cash[s] + acc.pos[s] * (mark[s] ?? 0))]));
     bots[owner] = { pnl: round2(Object.values(byProduct).reduce((a, b) => a + b, 0)), byProduct, volume: Object.values(acc.volume).reduce((a, b) => a + b, 0) };
   }
-  return { day, seed, results, bots, fair: lastFair, mark, priceRows, tradeRows, observationRows };
+  return { day, seed, results, bots, fair: lastFair, mark, priceRows, tradeRows, observationRows, carry: world.carry?.() ?? null };
 }
 
 /** Validate orders from a bot or algorithm: integer price, non-zero integer quantity, known symbol. */

@@ -48,7 +48,7 @@ Sign in as Attis. The admin panel appears at the top of `/algo`.
 
 1. **Start new round…**
    - **Archives the old round:** days, results, the leaderboard and submissions move to `data/algo/archive/<time>/` on the server.
-   - **Generates data days:** it asks how many (default 14, i.e. two weeks), numbered −14 to −1. These are bots-only days for players to study and backtest on, generated with the current design.
+   - **Generates data days:** it asks how many (default 14, i.e. two weeks), numbered −14 to −1. These are bots-only days for players to study and backtest on, generated oldest first with the current design, each continuing the one before.
    - **Day 0:** the first real day.
    - **Round numbering:** a round that never ran a day is redone under the same number.
 2. **Schedule.** Tick **Run automatically every day at 12:00** (New York time) and pick a start date.
@@ -82,7 +82,9 @@ Each day is 10,000 ticks. Each tick ([algo/sim.js](algo/sim.js)):
 
 So both price and code efficiency matter.
 
-At the end of the day, positions are marked at fair value. Prices, bots and matching each use their own seeded random stream, so a backtest replays a day's prices and bot behaviour exactly.
+**One continuous market:** each day picks up exactly where the previous one ended, including prices, weather and everything else the design tracks. So the data days and the competition days form one continuous series: Day −13 opens where Day −14 closed, and Day 0 opens where Day −1 closed. The server keeps each day's start and end state in `days/<day>/world.json`.
+
+At the end of the day, positions are marked at fair value. Prices, bots and matching each use their own seeded random stream, and a backtest starts from the same state as the real day, so it replays that day's prices and bot behaviour exactly.
 
 ### Designing a round (kept secret)
 
@@ -91,7 +93,7 @@ The real design lives in `algo/secret/competition.js`. That folder is git-ignore
 A design file defines:
 
 - **products:** each with a position limit.
-- **model:** fair values each tick, and optionally `observations(t)` for the features published to players.
+- **model:** fair values each tick, and optionally `observations(t)` for the features published to players, and `carry()` for the state the next day continues from (it gets it back as `carry`).
 - **bots:** `quote()` for makers and `take()` for takers. A bot's `name` is the id players see when they trade with it.
 - **settings:** ticks per day, the per-call time limit, and the sample `template`.
 
