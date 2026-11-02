@@ -82,12 +82,12 @@ npm run migrate -- https://ascend-exchange.fly.dev         # copy this laptop's 
 
 **After that:**
 - **Code changes:** `fly deploy`.
-- **Design changes:** run the `fly secrets set ALGO_DESIGN_B64=...` line again. The server restarts with the new design.
+- **Design changes:** run the `fly secrets set ALGO_DESIGN_B64=...` line again. The server restarts with the new design. For a new round with new products, then press **Start new round…** on the algo admin panel.
 - **Logs:** `fly logs`.
 - **Status:** `fly status`.
 - **More memory:** `fly scale memory 2048`.
 - **Backups:** Fly snapshots the volume daily. `npm run migrate` can also copy data to any server that's running.
-- **Admin work:** use the admin pages on the fly.dev link, such as **Generate data day**. The `npm run algo:*` tools only work on a local copy.
+- **Admin work:** use the admin pages on the fly.dev link, such as **Start new round…** and the run schedule. The `npm run algo:*` tools only work on a local copy.
 
 ### For players: setting up your account
 
@@ -136,7 +136,7 @@ Once you're in:
 
 ### Algo trading competition (`/algo`)
 
-This is an IMC Prosperity-style competition on the same server and link. Players sign in with their exchange accounts and write a Python `Trader`. Every night you simulate a new day in which all submitted algorithms trade against the bots and each other.
+This is an IMC Prosperity-style competition on the same server and link. Players sign in with their exchange accounts and write a Python `Trader`. Every day a new day is simulated, automatically at a set time, in which all submitted algorithms trade against the bots and each other.
 
 **One-time setup:** run `npm run algo:setup`. It creates a project-local Python (`.venv/`, git-ignored) with numpy, pandas and jsonpickle for player code.
 
@@ -144,18 +144,20 @@ This is an IMC Prosperity-style competition on the same server and link. Players
 
 **Running it:**
 
-1. Press **Generate data day** a few times before the start (or, with the server stopped, run `npm run algo:reset-data` to replace them with 3 fresh ones; `npm run algo:export` zips them for sending). Data days run the bots only, and players get their prices and trades to study and backtest on. Three data days of 10,000 ticks gives 30,000 ticks.
-2. Each night, press **Run Day N** after the deadline. It runs every player's latest submission for one simulated day, then releases the results and that day's data right away. **Delete this day** removes a bad run so you can run it again.
-3. **Practice week:** while the admin checkbox is on (it starts on), days run and show standings but don't count toward the cumulative leaderboard. Turn it off when the real competition starts. Each day also has a **Count this day** / **Make it practice** toggle.
-4. Set the deadline text shown to players in the admin panel. The day only runs when you press the button.
+1. **Start new round…** (admin panel) retires the current round: days, results, the leaderboard and submissions move to `data/algo/archive/<time>/` on the server, and 3 fresh data days are generated with the current design. Players keep the code in their editors. Data days run the bots only; players get their prices, trades and features to study and backtest on (3 × 10,000 ticks).
+2. **Schedule:** tick **Run automatically every day at 12:00** and pick a start date. Leaving a gap after a new round gives players time to research. The day then runs by itself every day at that time (New York time), with every player's latest submission, and releases the results and that day's data right away. The page shows players when the next run is. A server that was down at the scheduled time catches up later the same day.
+3. **Run Day N now** runs a day immediately instead. **Delete this day** removes a bad run so you can run it again.
+4. **Practice week:** while that admin checkbox is on, days run and show standings but don't count toward the cumulative leaderboard (a new round turns it off). Each day also has a **Count this day** / **Make it practice** toggle.
 
 **What players get:**
 
 - **Editor:** a Python editor with autosave, starting from a Prosperity-compatible template (`from datamodel import Order, TradingState, ...`).
 - **Run backtest:** replays a released day's prices and bots with only their algorithm and reports P&L by product, errors and their prints. Building a full backtester on the downloaded data is up to them.
 - **Submit:** their latest submission is what runs in the next day.
-- **Results:** P&L per day, a cumulative leaderboard, and their own trades and log for each day.
-- **Market data:** a price chart, an order book they can scrub tick by tick, and downloads of `prices.csv` / `trades.csv` in Prosperity's format.
+- **Results:** P&L per day, a cumulative leaderboard with a chart of everyone's cumulative P&L, and their own trades and log for each day.
+- **Market data:** a price chart, an order book they can scrub tick by tick, a chart of each published feature, and downloads of `prices.csv` / `trades.csv` / `observations.csv` in Prosperity's format.
+- **Features:** if the design publishes any (e.g. weather), each tick's values arrive in `state.observations.plainValueObservations`, numbers and a few text categories.
+- **Counterparties:** on their own fills (`state.own_trades`, their trades CSV, backtest fills) the other side is named: another player's name or a bot's id. They are `SUBMISSION`. Everyone else's trades are anonymous.
 
 **Each tick** ([algo/sim.js](algo/sim.js)):
 
@@ -164,15 +166,15 @@ This is an IMC Prosperity-style competition on the same server and link. Players
 3. Algorithm orders take liquidity from bot quotes: best price first, then shared **pro-rata** at each price, since everything in a tick arrives at once.
 4. Algorithm orders that cross each other clear in a uniform-price batch auction.
 5. Taker bots trade against whatever rests.
-6. Everything is cancelled.
+6. Everything is cancelled. Algorithms see their own fills (with the counterparty) and the market's anonymous trades next tick.
 
 At the end of the day, positions are marked at fair value. Each day has its own seed, so backtests replay exactly the same prices and bot quotes.
 
 **Designing the game (kept secret):** the real design goes in `algo/secret/competition.js`. That folder is git-ignored, so the design never reaches GitHub. The server uses it whenever it exists, and otherwise falls back to the public placeholder in [algo/competition.example.js](algo/competition.example.js). Keep a private backup of the secret file, because it isn't in the repo. A design file defines:
 
 - **products:** each with a position limit.
-- **price model:** produces fair values each tick.
-- **bots:** `quote()` for makers and `take()` for takers.
+- **price model:** produces fair values each tick, and optionally `observations(t)`: features published to players each tick.
+- **bots:** `quote()` for makers and `take()` for takers. A bot's `name` is the id players see when they trade with it.
 - **settings:** ticks per day, the per-call time limit, and the player template.
 
 **Player code safety:** each algorithm runs in its own Python process ([algo/py/host.py](algo/py/host.py)) with a clean environment, a CPU-time cap, an import allowlist, and a hook that blocks file access, network, subprocesses and similar operations. That's solid for a club competition, but it isn't a hardened sandbox. For strangers, run the server inside a container.

@@ -12,19 +12,22 @@ const TRADE_COLUMNS = ['timestamp', 'buyer', 'seller', 'symbol', 'currency', 'pr
  * The algo competition: players' code, daily simulations, released data, results.
  *
  * Files under `dir`:
- *   state.json                         drafts, latest submissions, day metadata and results
+ *   state.json                         drafts, latest submissions, day metadata and results, schedule
  *   days/<day>/prices.csv, trades.csv  released market data (Prosperity format)
- *   days/<day>/own/<userId>.csv         each player's fills that day
+ *   days/<day>/observations.csv         the features published each tick (weather and the like), if the design has any
+ *   days/<day>/own/<userId>.csv         each player's fills that day, with the counterparty named
  *   days/<day>/code/<userId>.py         the code that ran that day
+ *   archive/<time>/                     everything from before the last "Start new round"
  */
 export class AlgoService {
-  constructor({ config, dir }) {
+  constructor({ config, dir, names = (id) => id }) {
     this.config = config;
     this.dir = dir;
+    this.names = names; // userId → display name (players see each other's names as counterparties)
     this.running = null; // { day, practice, progress, startedAt }
+    this.preparing = null; // { startedAt } while a new round's data days are generated
     this.backtests = 0;
-    // practiceMode: nightly days run normally but don't count toward the cumulative leaderboard
-    this.state = { drafts: {}, submissions: {}, days: [], nextDay: 1, deadline: '', practiceMode: true };
+    this.state = freshState();
     const file = path.join(dir, 'state.json');
     if (fs.existsSync(file)) Object.assign(this.state, JSON.parse(fs.readFileSync(file, 'utf8')));
   }
@@ -76,6 +79,7 @@ export class AlgoService {
     try {
       const started = Date.now();
       const res = await simulateDay({ config: this.config, day: d.day, seed: d.seed, agents: [agent], record: false, options: { kind: d.practice ? 'data' : 'competition' } });
+      // fills: [timestamp, product, signed quantity, price, counterparty]
       return { day: d.day, seconds: (Date.now() - started) / 1000, ...res.results[userId] };
     } finally {
       agent.close();
@@ -97,7 +101,7 @@ export class AlgoService {
     this.running = { day, practice, progress: 0, startedAt: Date.now(), players: entries.length };
     const agents = [];
     try {
-      for (const e of entries) agents.push(await startAgent({ name: e.userId, code: e.code, timeLimitMs: this.config.timeLimitMs }));
+      for (const e of entries) agents.push({ ...(await startAgent({ name: e.userId, code: e.code, timeLimitMs: this.config.timeLimitMs })), label: this.names(e.userId) });
       const res = await simulateDay({
         config: this.config,
         day,
@@ -144,10 +148,16 @@ export class AlgoService {
       seller: reveal && t.botSeller ? t.seller : '',
     }));
     fs.writeFileSync(path.join(dir, 'trades.csv'), toCsv(publicTrades, TRADE_COLUMNS));
+    if (res.observationRows?.length) {
+      const columns = Object.keys(res.observationRows[0]);
+      fs.writeFileSync(path.join(dir, 'observations.csv'), toCsv(res.observationRows, columns));
+    }
+    // a player's own fills name the other side: another player's name, or a bot's id
+    const label = (owner) => (entries.some((x) => x.userId === owner) ? this.names(owner) : owner);
     for (const e of entries) {
       const mine = res.tradeRows
         .filter((t) => t.buyer === e.userId || t.seller === e.userId)
-        .map((t) => ({ ...t, currency, buyer: t.buyer === e.userId ? 'SUBMISSION' : '', seller: t.seller === e.userId ? 'SUBMISSION' : '' }));
+        .map((t) => ({ ...t, currency, buyer: t.buyer === e.userId ? 'SUBMISSION' : label(t.buyer), seller: t.seller === e.userId ? 'SUBMISSION' : label(t.seller) }));
       fs.writeFileSync(path.join(dir, 'own', `${e.userId}.csv`), toCsv(mine, TRADE_COLUMNS));
       fs.writeFileSync(path.join(dir, 'code', `${e.userId}.py`), e.code);
       const r = res.results[e.userId];
@@ -181,11 +191,108 @@ export class AlgoService {
     this.save();
   }
 
+  // ---------------------------------------------------------------- rounds
+
+  /**
+   * Retire everything from the current round and start fresh: the state and day files move to
+   * archive/<time>/, then `dataDays` bots-only days are generated with the current design for players to study.
+   * Players keep the code in their editor; submissions, days, results and the leaderboard start over.
+   */
+  async newRound({ dataDays = 3 } = {}) {
+    if (this.running || this.preparing) throw new AlgoError('A simulation is running; try again when it finishes');
+    this.preparing = { startedAt: Date.now(), dataDays, done: 0 };
+    try {
+      const archive = path.join(this.dir, 'archive', new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-'));
+      fs.mkdirSync(archive, { recursive: true });
+      this.save();
+      fs.copyFileSync(path.join(this.dir, 'state.json'), path.join(archive, 'state.json'));
+      if (fs.existsSync(path.join(this.dir, 'days'))) fs.renameSync(path.join(this.dir, 'days'), path.join(archive, 'days'));
+      const { drafts, schedule, round } = this.state;
+      this.state = { ...freshState(), drafts, schedule: { ...schedule, lastRun: null }, round: (round ?? 0) + 1, practiceMode: false };
+      this.save();
+      for (let i = 0; i < dataDays; i++) {
+        await this.runDay({ practice: true });
+        this.preparing.done = i + 1;
+      }
+      return { round: this.state.round, archived: archive, dataDays: this.state.days.map((d) => d.day) };
+    } finally {
+      this.preparing = null;
+    }
+  }
+
+  // ---------------------------------------------------------------- schedule
+
+  /** Run the next day automatically every day at `time` (in `timeZone`), from `startDate` on. */
+  setSchedule({ enabled, time, startDate, timeZone } = {}) {
+    const s = { ...this.state.schedule };
+    if (enabled !== undefined) s.enabled = !!enabled;
+    if (time !== undefined) {
+      if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) throw new AlgoError('Time must look like 12:00');
+      s.time = time;
+    }
+    if (startDate !== undefined) {
+      if (startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) throw new AlgoError('Start date must look like 2026-11-04');
+      s.startDate = startDate || null;
+    }
+    if (timeZone !== undefined) {
+      try {
+        new Intl.DateTimeFormat('en-US', { timeZone });
+      } catch {
+        throw new AlgoError(`Unknown time zone ${timeZone}`);
+      }
+      s.timeZone = timeZone;
+    }
+    this.state.schedule = s;
+    this.save();
+    return this.scheduleView();
+  }
+
+  /** When the next automatic run happens (ms since epoch), or null if the schedule is off. */
+  nextRunAt(now = Date.now()) {
+    const s = this.state.schedule;
+    if (!s.enabled) return null;
+    const { date: today, time } = zoned(now, s.timeZone);
+    let date = s.startDate && s.startDate > today ? s.startDate : today;
+    if (date === today && (time >= s.time || s.lastRun === today)) date = addDays(today, 1);
+    return zonedToUtc(date, s.time, s.timeZone);
+  }
+
+  /** Called every minute: runs the day if it's time (once per calendar day; a server that was down catches up the same day). */
+  checkSchedule(now = Date.now()) {
+    const s = this.state.schedule;
+    if (!s.enabled || this.running || this.preparing) return null;
+    const { date, time } = zoned(now, s.timeZone);
+    if (time < s.time || s.lastRun === date || (s.startDate && date < s.startDate)) return null;
+    s.lastRun = date;
+    this.save();
+    this.lastError = null;
+    return this.runDay().catch((err) => {
+      this.lastError = `Scheduled run on ${date}: ${err.message}`;
+      if (!(err instanceof AlgoError)) console.error('[algo schedule]', err);
+    });
+  }
+
+  startScheduler() {
+    clearInterval(this.timer);
+    this.timer = setInterval(() => this.checkSchedule(), 30_000);
+    this.timer.unref();
+  }
+
+  stopScheduler() {
+    clearInterval(this.timer);
+  }
+
+  scheduleView(now = Date.now()) {
+    const s = this.state.schedule;
+    return { enabled: s.enabled, time: s.time, timeZone: s.timeZone, startDate: s.startDate, nextRunAt: this.nextRunAt(now) };
+  }
+
   dataFile(day, kind, userId) {
     const d = this.getDay(day);
     const file =
       kind === 'prices' ? 'prices.csv'
       : kind === 'trades' ? 'trades.csv'
+      : kind === 'observations' ? 'observations.csv'
       : kind === 'own' ? path.join('own', `${userId}.csv`)
       : kind === 'log' ? path.join('own', `${userId}.log`)
       : kind === 'code' ? path.join('code', `${userId}.py`)
@@ -233,7 +340,10 @@ export class AlgoService {
       nextDay: this.state.nextDay,
       deadline: this.state.deadline,
       practiceMode: this.state.practiceMode !== false,
+      round: this.state.round ?? 1,
+      schedule: this.scheduleView(),
       running: this.running && { day: this.running.day, practice: this.running.practice, progress: this.running.progress },
+      preparing: this.preparing && { dataDays: this.preparing.dataDays, done: this.preparing.done },
     };
   }
 
@@ -276,6 +386,49 @@ export class AlgoService {
       leaderboard: this.leaderboard(names),
     };
   }
+}
+
+function freshState() {
+  return {
+    drafts: {},
+    submissions: {},
+    days: [],
+    nextDay: 1,
+    deadline: '',
+    practiceMode: true, // practice week: days run normally but don't count toward the cumulative leaderboard
+    round: 1,
+    schedule: { enabled: false, time: '12:00', timeZone: 'America/New_York', startDate: null, lastRun: null },
+  };
+}
+
+/** Calendar date (YYYY-MM-DD) and wall-clock time (HH:MM) of an instant in a time zone. */
+export function zoned(ms, timeZone) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+      .formatToParts(new Date(ms))
+      .map((p) => [p.type, p.value]),
+  );
+  return { date: `${parts.year}-${parts.month}-${parts.day}`, time: `${parts.hour}:${parts.minute}` };
+}
+
+/** The instant (ms) when the wall clock in `timeZone` shows `date` `time`. */
+export function zonedToUtc(date, time, timeZone) {
+  const [y, m, d] = date.split('-').map(Number);
+  const [hh, mm] = time.split(':').map(Number);
+  const wanted = Date.UTC(y, m - 1, d, hh, mm);
+  let guess = wanted;
+  for (let i = 0; i < 3; i++) {
+    const shown = zoned(guess, timeZone);
+    const [sy, sm, sd] = shown.date.split('-').map(Number);
+    const [sh, smin] = shown.time.split(':').map(Number);
+    guess += wanted - Date.UTC(sy, sm - 1, sd, sh, smin);
+  }
+  return guess;
+}
+
+function addDays(date, n) {
+  const [y, m, d] = date.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
 }
 
 function checkCode(code) {

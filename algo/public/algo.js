@@ -59,6 +59,16 @@
   const signed = (n) => (n == null ? '–' : `${n > 0 ? '+' : ''}${fmt(n)}`);
   const cls = (n) => (n > 0 ? 'up' : n < 0 ? 'down' : '');
   const time = (ts) => (ts ? new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '');
+  // a scheduled time, shown in the schedule's time zone (e.g. "Wed, Nov 4, 12:00 PM EST")
+  const when = (ms, timeZone) => new Date(ms).toLocaleString([], { timeZone, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
+  const COLORS = ['#58a6ff', '#3fb950', '#f85149', '#d29922', '#bc8cff', '#39c5cf', '#ff7b72', '#ffa657', '#7ee787', '#f778ba', '#a5d6ff', '#e3b341', '#56d364', '#8b949e'];
+
+  function download(name, text, type = 'text/csv') {
+    const a = h('a', { href: URL.createObjectURL(new Blob([text], { type })), download: name });
+    document.body.append(a);
+    a.click();
+    a.remove();
+  }
   // data days: bots only, released for study; practice days: everyone trades but it doesn't count
   const dayLabel = (d) => (d.practice ? `Data day ${d.day}` : `Day ${d.day}${d.counts === false ? ' (practice)' : ''}`);
 
@@ -71,7 +81,8 @@
 
   // ------------------------------------------------------------------ state
 
-  const store = { me: null, admin: null, editor: null, dirty: false, saving: null, md: { day: null, product: null, data: new Map() } };
+  const store = { me: null, admin: null, editor: null, dirty: false, saving: null, md: { day: null, product: null, feature: null, data: new Map(), obs: new Map() } };
+  const FEATURES = '__features'; // the market-data tab showing the published features instead of a product
 
   // ------------------------------------------------------------------ sign in
 
@@ -178,12 +189,7 @@
     onEdit();
   });
 
-  $('#download-code').addEventListener('click', () => {
-    const a = h('a', { href: URL.createObjectURL(new Blob([code()], { type: 'text/x-python' })), download: 'trader.py' });
-    document.body.append(a);
-    a.click();
-    a.remove();
-  });
+  $('#download-code').addEventListener('click', () => download('trader.py', code(), 'text/x-python'));
 
   // ------------------------------------------------------------------ backtest + submit
 
@@ -214,14 +220,38 @@
         h('span', { class: 'muted' }, `P&L on ${dayLabel(store.me.days.find((d) => d.day === r.day) ?? { day: r.day })} · ran in ${r.seconds.toFixed(1)}s`)),
       table(['product', 'P&L', 'end position', 'volume'], products, '', [1, 2, 3]),
       r.rejected ? h('p', { class: 'muted small' }, `${r.rejected} order batches were rejected for breaking position limits.`) : '',
+      counterparties(r),
       r.errors?.length ? [h('h3', {}, 'Errors'), h('pre', { class: 'log err' }, r.errors.join('\n'))] : '',
       r.logs?.length ? [h('h3', {}, 'Your prints (last 200)'), h('pre', { class: 'log' }, r.logs.join('\n'))] : '',
     );
   }
 
+  /** Who you traded with in a backtest: volume by counterparty, and all fills as a CSV. */
+  function counterparties(r) {
+    const fills = r.fills ?? [];
+    if (!fills.length) return '';
+    const by = {};
+    for (const [, , q, , cp] of fills) {
+      const x = (by[cp] ??= { bought: 0, sold: 0, fills: 0 });
+      if (q > 0) x.bought += q;
+      else x.sold -= q;
+      x.fills++;
+    }
+    const rows = Object.entries(by)
+      .sort((a, b) => b[1].bought + b[1].sold - (a[1].bought + a[1].sold))
+      .map(([cp, x]) => h('tr', {}, h('td', {}, cp), h('td', { class: 'num' }, x.fills), h('td', { class: 'num' }, x.bought), h('td', { class: 'num' }, x.sold)));
+    const csv = () => ['timestamp;product;quantity;price;counterparty', ...fills.map((f) => f.join(';'))].join('\n') + '\n';
+    return [
+      h('div', { class: 'toolbar' }, h('h3', {}, 'Who you traded with'), h('span', { class: 'grow' }),
+        h('button', { type: 'button', class: 'small ghost', onclick: () => download(`backtest_fills_day_${r.day}.csv`, csv()) }, `Download fills (${fills.length})`)),
+      table(['counterparty', 'fills', 'you bought', 'you sold'], rows, '', [1, 2, 3]),
+    ];
+  }
+
   $('#submit').addEventListener('click', async () => {
     const me = store.me;
-    if (!confirm(`Submit this code for Day ${me.nextDay}? It replaces any earlier submission and runs when the admin simulates the day.`)) return;
+    const at = me.schedule?.nextRunAt ? ` at ${when(me.schedule.nextRunAt, me.schedule.timeZone)}` : ' when the admin simulates the day';
+    if (!confirm(`Submit this code for Day ${me.nextDay}? It replaces any earlier submission and runs${at}, and every day after until you submit again.`)) return;
     try {
       await saveDraft();
       const s = await api('POST', '/submit', { code: code() });
@@ -258,8 +288,55 @@
       table(['day', 'P&L', 'total', '', ''], mine, 'No competition days have run yet.', [1, 2]),
       latest ? [h('h3', {}, `${dayLabel({ day: latest.day, counts: latest.counts })} standings`), table(['#', 'player', 'P&L'], latestRows, '', [0, 2])] : '',
       h('h3', {}, 'Leaderboard'),
+      me.leaderboard.length ? [h('canvas', { id: 'lb-chart', height: 220 }), h('div', { id: 'lb-legend', class: 'legend' })] : '',
       table(['#', 'player', 'total P&L'], board, me.practiceMode ? 'Nothing counts yet: it’s the practice week.' : 'The leaderboard fills in after the first day that counts.', [0, 2]),
     );
+    if (me.leaderboard.length) drawLeaderboard(me);
+  }
+
+  /** Each player's cumulative P&L over the days that count. */
+  function drawLeaderboard(me) {
+    const canvas = $('#lb-chart');
+    const dpr = devicePixelRatio;
+    const w = (canvas.width = canvas.clientWidth * dpr);
+    const hgt = (canvas.height = 220 * dpr);
+    const ctx = canvas.getContext('2d');
+    const days = [...new Set(me.leaderboard.flatMap((r) => Object.keys(r.byDay).map(Number)))].sort((a, b) => a - b);
+    const lines = me.leaderboard.map((r, i) => {
+      let cum = 0;
+      return { name: r.name, color: COLORS[i % COLORS.length], me: r.name === me.name, pts: [0, ...days.map((d) => (cum += r.byDay[d] ?? 0))] };
+    });
+    const all = lines.flatMap((l) => l.pts);
+    const lo = Math.min(0, ...all);
+    const hi = Math.max(0, ...all);
+    const padL = 54 * dpr;
+    const x = (i) => padL + ((w - padL - 10 * dpr) * i) / Math.max(days.length, 1);
+    const y = (v) => hgt - 22 * dpr - ((hgt - 34 * dpr) * (v - lo)) / (hi - lo || 1);
+    ctx.font = `${10 * dpr}px system-ui`;
+    ctx.fillStyle = '#8b949e';
+    ctx.strokeStyle = 'rgba(139,148,158,0.35)';
+    ctx.lineWidth = dpr;
+    ctx.beginPath();
+    ctx.moveTo(padL, y(0));
+    ctx.lineTo(w, y(0));
+    ctx.stroke();
+    ctx.fillText(fmt(hi, 0), 2, y(hi) + 4 * dpr);
+    ctx.fillText(fmt(lo, 0), 2, y(lo));
+    if (lo < 0 && hi > 0) ctx.fillText('0', 2, y(0) + 4 * dpr);
+    ['start', ...days.map((d) => `Day ${d}`)].forEach((label, i) => {
+      if (days.length > 12 && i % Math.ceil(days.length / 12)) return;
+      ctx.fillText(label, x(i) - (i ? 14 * dpr : 0), hgt - 6 * dpr);
+    });
+    for (const l of [...lines].sort((a, b) => a.me - b.me)) {
+      ctx.strokeStyle = l.color;
+      ctx.fillStyle = l.color;
+      ctx.lineWidth = (l.me ? 3 : 1.5) * dpr;
+      ctx.beginPath();
+      l.pts.forEach((v, i) => (i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v))));
+      ctx.stroke();
+      l.pts.forEach((v, i) => i && ctx.fillRect(x(i) - 2 * dpr, y(v) - 2 * dpr, 4 * dpr, 4 * dpr));
+    }
+    fill($('#lb-legend'), lines.map((l) => h('span', { class: l.me ? 'me' : '' }, h('i', { style: `background:${l.color}` }), l.name)));
   }
 
   // ------------------------------------------------------------------ market data
@@ -282,6 +359,20 @@
     return byProduct;
   }
 
+  /** The day's published features (rows of {timestamp, feature: value}), or null if the day has none. */
+  async function loadObservations(day) {
+    if (store.md.obs.has(day)) return store.md.obs.get(day);
+    const res = await fetch(fileUrl(`/days/${day}/observations.csv`));
+    let rows = null;
+    if (res.ok) {
+      const [head, ...lines] = (await res.text()).trim().split('\n');
+      const cols = head.split(';');
+      rows = lines.map((line) => Object.fromEntries(line.split(';').map((v, i) => [cols[i], v])));
+    }
+    store.md.obs.set(day, rows);
+    return rows;
+  }
+
   async function renderMarket() {
     const day = store.md.day;
     const dl = $('#md-downloads');
@@ -290,53 +381,74 @@
       return;
     }
     const info = store.me.days.find((d) => d.day === day);
-    fill(dl, 
-      h('a', { href: fileUrl(`/days/${day}/prices.csv`) }, 'prices.csv'),
-      h('a', { href: fileUrl(`/days/${day}/trades.csv`) }, 'trades.csv'),
-      info?.entered ? h('a', { href: fileUrl(`/days/${day}/own.csv`) }, 'my trades.csv') : '',
-    );
     let data;
+    let obs;
     try {
-      data = await loadDay(day);
+      [data, obs] = await Promise.all([loadDay(day), loadObservations(day)]);
     } catch (err) {
       return toast(err.message, 'error');
     }
-    const products = Object.keys(data);
-    if (!products.includes(store.md.product)) store.md.product = products[0];
-    fill($('#md-products'), ...products.map((p) => h('button', {
+    fill(dl, 
+      h('a', { href: fileUrl(`/days/${day}/prices.csv`) }, 'prices.csv'),
+      h('a', { href: fileUrl(`/days/${day}/trades.csv`) }, 'trades.csv'),
+      obs ? h('a', { href: fileUrl(`/days/${day}/observations.csv`) }, 'observations.csv') : '',
+      info?.entered ? h('a', { href: fileUrl(`/days/${day}/own.csv`) }, 'my trades.csv') : '',
+    );
+    const tabs = [...Object.keys(data), ...(obs ? [FEATURES] : [])];
+    if (!tabs.includes(store.md.product)) store.md.product = tabs[0];
+    fill($('#md-products'), ...tabs.map((p) => h('button', {
       type: 'button',
       class: p === store.md.product ? 'active' : '',
       onclick: () => { store.md.product = p; renderMarket(); },
-    }, p)));
-    const rows = data[store.md.product] ?? [];
+    }, p === FEATURES ? 'Weather & features' : p)));
+    const features = obs ? Object.keys(obs[0] ?? {}).filter((c) => c !== 'day' && c !== 'timestamp') : [];
+    const numeric = features.filter((c) => obs.some((r) => r[c] !== '' && Number.isFinite(Number(r[c]))));
+    if (!numeric.includes(store.md.feature)) store.md.feature = numeric[0];
+    fill($('#md-features'), store.md.product === FEATURES ? numeric.map((f) => h('button', {
+      type: 'button',
+      class: f === store.md.feature ? 'active' : '',
+      onclick: () => { store.md.feature = f; renderMarket(); },
+    }, f)) : '');
+    const rows = currentRows();
     const slider = $('#md-slider');
     slider.max = Math.max(rows.length - 1, 0);
     if (Number(slider.value) > rows.length - 1) slider.value = 0;
-    drawChart(rows, Number(slider.value));
-    renderBook(rows[Number(slider.value)]);
+    showTick(rows, Number(slider.value));
   }
 
-  $('#md-slider').addEventListener('input', () => {
-    const rows = store.md.data.get(store.md.day)?.[store.md.product] ?? [];
-    drawChart(rows, Number($('#md-slider').value));
-    renderBook(rows[Number($('#md-slider').value)]);
-  });
+  const currentRows = () => (store.md.product === FEATURES ? store.md.obs.get(store.md.day) ?? [] : store.md.data.get(store.md.day)?.[store.md.product] ?? []);
+
+  function showTick(rows, i) {
+    if (store.md.product === FEATURES) {
+      drawChart(rows, i, [{ key: store.md.feature, color: '#d29922', width: 1.5 }]);
+      renderFeatures(rows[i]);
+    } else {
+      drawChart(rows, i);
+      renderBook(rows[i]);
+    }
+  }
+
+  $('#md-slider').addEventListener('input', () => showTick(currentRows(), Number($('#md-slider').value)));
   $('#md-day').addEventListener('change', () => {
     store.md.day = Number($('#md-day').value);
     renderMarket();
   });
 
-  function drawChart(rows, cursor) {
+  const PRICE_LINES = [
+    { key: 'bid_price_1', color: 'rgba(63,185,80,0.35)', width: 1 },
+    { key: 'ask_price_1', color: 'rgba(248,81,73,0.35)', width: 1 },
+    { key: 'mid_price', color: '#58a6ff', width: 1.5 },
+  ];
+
+  function drawChart(rows, cursor, lines = PRICE_LINES) {
     const canvas = $('#chart');
     const w = (canvas.width = canvas.clientWidth * devicePixelRatio);
     const hgt = (canvas.height = 220 * devicePixelRatio);
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, w, hgt);
-    const series = (key) => rows.map((r) => (r[key] === '' ? null : Number(r[key])));
-    const mid = series('mid_price');
-    const bid = series('bid_price_1');
-    const ask = series('ask_price_1');
-    const all = [...bid, ...ask, ...mid].filter((v) => v != null);
+    const series = (key) => rows.map((r) => (r[key] === '' || r[key] == null || !Number.isFinite(Number(r[key])) ? null : Number(r[key])));
+    const values = lines.map((l) => series(l.key));
+    const all = values.flat().filter((v) => v != null);
     if (!all.length) return;
     const lo = Math.min(...all);
     const hi = Math.max(...all);
@@ -356,9 +468,7 @@
       });
       ctx.stroke();
     };
-    line(bid, 'rgba(63,185,80,0.35)', 1);
-    line(ask, 'rgba(248,81,73,0.35)', 1);
-    line(mid, '#58a6ff', 1.5);
+    lines.forEach((l, i) => line(values[i], l.color, l.width));
     ctx.fillStyle = '#8b949e';
     ctx.font = `${10 * devicePixelRatio}px system-ui`;
     ctx.fillText(fmt(hi, 1), 2, 12 * devicePixelRatio);
@@ -369,6 +479,13 @@
     ctx.moveTo(x(cursor), 0);
     ctx.lineTo(x(cursor), hgt);
     ctx.stroke();
+  }
+
+  function renderFeatures(row) {
+    $('#md-ts').textContent = row ? `t=${row.timestamp}` : '';
+    if (!row) return fill($('#md-book'));
+    const rows = Object.entries(row).filter(([k]) => k !== 'day' && k !== 'timestamp').map(([k, v]) => h('tr', {}, h('td', {}, k), h('td', { class: 'num' }, v)));
+    fill($('#md-book'), table(['feature', 'value'], rows, '', [1]));
   }
 
   function renderBook(row) {
@@ -430,6 +547,30 @@
         }
       } }, 'Delete this day')));
 
+    const sched = a.schedule;
+    const schedOn = h('input', { type: 'checkbox', checked: sched.enabled });
+    const schedTime = h('input', { type: 'time', value: sched.time });
+    const schedStart = h('input', { type: 'date', value: sched.startDate ?? '' });
+    const saveSchedule = async () => {
+      try {
+        const s = await api('POST', '/admin/schedule', { enabled: schedOn.checked, time: schedTime.value, startDate: schedStart.value });
+        toast(s.enabled ? `Next run: Day ${a.nextDay} at ${when(s.nextRunAt, s.timeZone)}` : 'Automatic runs are off');
+        load();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    };
+    const newRound = async () => {
+      if (!confirm('Start a new round?\n\nThis retires everything from the current round: days, results, the leaderboard and everyone’s submissions move to an archive on the server. Then 3 new data days are generated with the current design. Players keep the code in their editors.\n\nSet the schedule’s start date to give players time to research.')) return;
+      try {
+        await api('POST', '/admin/new-round', { dataDays: 3 });
+        toast('New round started: generating data days');
+        pollAdmin();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    };
+
     const run = async (practice) => {
       const what = practice
         ? 'a data day (bots only, released for players to study and backtest on)'
@@ -447,13 +588,21 @@
     fill(box, 
       h('div', { class: 'toolbar' }, h('h2', {}, 'Admin'), h('span', { class: 'grow' }),
         h('span', { class: 'muted small' }, `${a.submissions.length} submissions for Day ${a.nextDay}`)),
+      a.preparing ? h('p', {}, `Starting round ${a.round}: generating data day ${a.preparing.done + 1} of ${a.preparing.dataDays}…`) : '',
       running
-        ? h('div', {}, h('p', {}, `Simulating ${running.practice ? 'practice day' : 'Day'} ${running.day}… ${Math.round(running.progress * 100)}%`),
+        ? h('div', {}, h('p', {}, `Simulating ${running.practice ? 'data day' : 'Day'} ${running.day}… ${Math.round(running.progress * 100)}%`),
             h('div', { class: 'progress-bar' }, h('div', { style: `width:${Math.round(running.progress * 100)}%` })))
         : h('div', { class: 'toolbar' },
-            h('button', { type: 'button', class: 'primary', onclick: () => run(false) }, `Run Day ${a.nextDay}${a.practiceMode ? ' (practice)' : ''}`),
-            h('button', { type: 'button', onclick: () => run(true) }, 'Generate data day'),
+            h('button', { type: 'button', class: 'primary', disabled: !!a.preparing, onclick: () => run(false) }, `Run Day ${a.nextDay} now${a.practiceMode ? ' (practice)' : ''}`),
+            h('button', { type: 'button', disabled: !!a.preparing, onclick: () => run(true) }, 'Generate data day'),
+            h('span', { class: 'grow' }),
+            h('button', { type: 'button', class: 'danger', disabled: !!a.preparing, onclick: newRound }, 'Start new round…'),
             a.lastError ? h('span', { class: 'error small' }, `Last run failed: ${a.lastError}`) : ''),
+      h('div', { class: 'toolbar small' },
+        h('label', { class: 'toolbar' }, schedOn, 'Run automatically every day at'), schedTime,
+        h('span', { class: 'muted' }, `(${sched.timeZone}) starting`), schedStart,
+        h('button', { type: 'button', class: 'small', onclick: saveSchedule }, 'Save'),
+        h('span', { class: sched.enabled ? 'up' : 'muted' }, sched.enabled && sched.nextRunAt ? `Next: Day ${a.nextDay} ${when(sched.nextRunAt, sched.timeZone)}` : 'Off: days only run when you press Run')),
       h('label', { class: 'toolbar small' },
         h('input', { type: 'checkbox', checked: a.practiceMode, onchange: async (e) => {
           await api('POST', '/admin/practice-mode', { on: e.target.checked });
@@ -478,7 +627,7 @@
     clearTimeout(pollTimer);
     pollTimer = setTimeout(async () => {
       await load();
-      if (store.admin?.running) pollAdmin();
+      if (store.admin?.running || store.admin?.preparing) pollAdmin();
     }, 1000);
   }
 
@@ -495,7 +644,10 @@
     $('#who').textContent = me.isAdmin ? `${me.name} (admin)` : me.name;
     $('#signout').hidden = false;
     fill($('#day-status'), 
-      me.running ? h('span', {}, `Simulating ${me.running.practice ? 'practice day' : `Day ${me.running.day}`}…`) : h('span', {}, 'Submissions open for ', h('b', {}, `Day ${me.nextDay}`)),
+      me.preparing ? h('span', {}, 'Preparing a new round…')
+      : me.running ? h('span', {}, `Simulating ${me.running.practice ? 'a data day' : `Day ${me.running.day}`}…`)
+      : h('span', {}, 'Submissions open for ', h('b', {}, `Day ${me.nextDay}`)),
+      !me.running && me.schedule?.nextRunAt ? [' · runs ', h('b', {}, when(me.schedule.nextRunAt, me.schedule.timeZone))] : '',
       me.deadline ? ` · ${me.deadline}` : '',
       me.practiceMode ? h('span', { style: 'color:var(--amber)' }, ' · practice week') : '');
     $('#submit').textContent = `Submit for Day ${me.nextDay}`;
@@ -531,7 +683,12 @@
         ' (order depths, your position, your fills and the market\'s trades since last tick) and returns ', h('code', {}, '(orders_by_product, conversions, traderData)'), '.'),
       h('p', {}, `A day has ${me.ticks} ticks. Position limits: ${limits}. If your orders for a product could take you past its limit, all of them are rejected for that tick. Each call must finish within ${me.timeLimitMs}ms.`),
       h('p', {}, 'Matching: every algorithm acts on the same snapshot at the same time. Your orders first trade against the bots\' quotes (best price first, then shared pro-rata with everyone at the same price), orders that cross other players clear in a batch auction, and what\'s left can be hit by taker bots. All orders are cancelled at the end of the tick.'),
-      h('p', {}, 'Each day the admin simulates a new day with everyone\'s latest submission trading against the bots and each other. P&L marks your position at fair value at the end of the day. That day\'s prices and trades are then released for backtesting.'),
+      h('p', {}, me.schedule?.enabled
+        ? `A new day runs automatically every day at ${when(me.schedule.nextRunAt, me.schedule.timeZone).replace(/^.*, /, '')} with everyone's latest submission trading against the bots and each other. Your submission keeps running each day until you submit a new one.`
+        : 'Each day the admin simulates a new day with everyone\'s latest submission trading against the bots and each other.',
+        ' P&L marks your position at fair value at the end of the day. That day\'s prices, trades and features are then released for backtesting.'),
+      h('p', {}, 'Features: ', h('code', {}, 'state.observations.plainValueObservations'), ' holds this tick\'s published features (numbers, and a few categories as text). The Weather & features tab and ', h('code', {}, 'observations.csv'), ' have their history.'),
+      h('p', {}, 'Counterparties: on your own fills (', h('code', {}, 'state.own_trades'), ', your trades CSV, backtest fills) the other side is named: a player\'s name, or a bot\'s id. You are ', h('code', {}, 'SUBMISSION'), '. The market\'s other trades are anonymous.'),
       h('p', {}, 'Available libraries: numpy, pandas, math, statistics, json, jsonpickle, collections and other standard helpers. Files, network and system access are disabled.'),
     );
   }
@@ -540,5 +697,5 @@
   if (storage.get(TOKEN_KEY)) load(true);
   else showLogin();
   // keep panels fresh so new results show up; the editor is never overwritten
-  setInterval(() => store.me && !store.admin?.running && load(), 20000);
+  setInterval(() => store.me && !store.admin?.running && !store.admin?.preparing && load(), 20000);
 })();

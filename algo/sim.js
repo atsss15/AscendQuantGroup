@@ -11,13 +11,16 @@ import { take, auction, makeRng } from './matching.js';
  *   4. Algorithm orders that cross each other clear in a uniform-price batch auction.
  *   5. What's left rests in the book; taker bots trade against bot quotes and algorithm orders alike.
  *   6. Everything is cancelled. Algorithms see their fills and the market's trades next tick.
+ *      On their own fills they see who was on the other side (a player's name or a bot's id);
+ *      the market's other trades are anonymous.
  * End of day: positions are marked at the products' fair value.
  *
  * @param {object} opts
  * @param {object} opts.config   competition config (products, ticks, model, bots) — see games/algo/config.js
  * @param {number} opts.day      day number (shows up in the data)
  * @param {number} opts.seed     seeds the price model, bots and tie-breaks; same seed + same orders = same day
- * @param {Array<{name: string, run: (state) => Promise<{orders?, traderData?, logs?, error?}>}>} opts.agents
+ * @param {Array<{name: string, label?: string, run: (state) => Promise<{orders?, traderData?, logs?, error?}>}>} opts.agents
+ *                               label: the name other players see as their counterparty (defaults to name)
  * @param {boolean} [opts.record] keep the full price/trade record (for data files)
  */
 export async function simulateDay({ config, day, seed, agents = [], record = true, options = {}, onProgress }) {
@@ -35,7 +38,9 @@ export async function simulateDay({ config, day, seed, agents = [], record = tru
   };
   for (const a of agents) account(a.name);
   const agentNames = new Set(agents.map((a) => a.name));
-  const agentState = new Map(agents.map((a) => [a.name, { traderData: '', ownTrades: emptyBySymbol(symbols), marketTrades: emptyBySymbol(symbols), logs: [], errors: new Map(), rejected: 0 }]));
+  const labels = new Map(agents.map((a) => [a.name, a.label ?? a.name]));
+  const labelOf = (owner) => labels.get(owner) ?? owner; // bots go by their id
+  const agentState = new Map(agents.map((a) => [a.name, { traderData: '', ownTrades: emptyBySymbol(symbols), marketTrades: emptyBySymbol(symbols), fills: [], logs: [], errors: new Map(), rejected: 0 }]));
   // repeated errors are grouped: first occurrence + count
   const addError = (st, timestamp, msg) => {
     const key = String(msg).trim().split('\n').at(-1).replace(/\(position -?\d+\)/, '');
@@ -46,12 +51,16 @@ export async function simulateDay({ config, day, seed, agents = [], record = tru
 
   const priceRows = [];
   const tradeRows = [];
+  const observationRows = [];
   let lastFair = {};
 
   for (let t = 0; t < config.ticks; t++) {
     const timestamp = t * (config.tickStep ?? 100);
     const fair = world.step(t);
     lastFair = fair;
+    // features published with this tick (weather and the like), shown to algorithms as plainValueObservations
+    const observed = world.observations?.(t) ?? {};
+    if (record && Object.keys(observed).length) observationRows.push({ day, timestamp, ...observed });
     // world: the price model (bots may read its state); shared: scratch space bots can use to coordinate within a tick
     const ctx = { t, timestamp, fair, rng: botRng, symbols, products: config.products, world, shared: {} };
 
@@ -75,7 +84,7 @@ export async function simulateDay({ config, day, seed, agents = [], record = tru
         own_trades: st.ownTrades,
         market_trades: st.marketTrades,
         position: Object.fromEntries(symbols.filter((s) => account(a.name).pos[s]).map((s) => [s, account(a.name).pos[s]])),
-        observations: world.observations?.(t) ?? {},
+        observations: { plain: observed },
       });
     }));
 
@@ -137,15 +146,14 @@ export async function simulateDay({ config, day, seed, agents = [], record = tru
       const reveal = config.revealCounterparties;
       for (const [name, st] of agentState) {
         const own = tr.buyer === name || tr.seller === name;
-        const view = {
-          symbol: tr.symbol,
-          price: tr.price,
-          quantity: tr.qty,
-          buyer: tr.buyer === name ? 'SUBMISSION' : reveal ? tr.buyer : '',
-          seller: tr.seller === name ? 'SUBMISSION' : reveal ? tr.seller : '',
-          timestamp,
-        };
+        // own fills name the counterparty; other trades only if the design reveals them
+        const side = (who) => (who === name ? 'SUBMISSION' : own || reveal ? labelOf(who) : '');
+        const view = { symbol: tr.symbol, price: tr.price, quantity: tr.qty, buyer: side(tr.buyer), seller: side(tr.seller), timestamp };
         (own ? st.ownTrades : st.marketTrades)[tr.symbol].push(view);
+        if (own && st.fills.length < 50000) {
+          const bought = tr.buyer === name;
+          st.fills.push([timestamp, tr.symbol, bought ? tr.qty : -tr.qty, tr.price, labelOf(bought ? tr.seller : tr.buyer)]);
+        }
       }
       if (record) tradeRows.push({ timestamp, buyer: tr.buyer, seller: tr.seller, symbol: tr.symbol, price: tr.price, quantity: tr.qty, botBuyer: !agentNames.has(tr.buyer), botSeller: !agentNames.has(tr.seller) });
     }
@@ -166,9 +174,16 @@ export async function simulateDay({ config, day, seed, agents = [], record = tru
       total += pnl;
     }
     const errors = [...st.errors.values()].map((e) => `[${e.timestamp}] ${e.msg}${e.count > 1 ? `\n    (happened ${e.count} times; first shown)` : ''}`);
-    results[a.name] = { pnl: round2(total), byProduct, errors, logs: st.logs.slice(-200), rejected: st.rejected };
+    results[a.name] = { pnl: round2(total), byProduct, errors, logs: st.logs.slice(-200), rejected: st.rejected, fills: st.fills };
   }
-  return { day, seed, results, fair: lastFair, mark, priceRows, tradeRows };
+  // the bots' own books, for checking a design (never shown to players)
+  const bots = {};
+  for (const [owner, acc] of accounts) {
+    if (agentNames.has(owner)) continue;
+    const byProduct = Object.fromEntries(symbols.map((s) => [s, round2(acc.cash[s] + acc.pos[s] * (mark[s] ?? 0))]));
+    bots[owner] = { pnl: round2(Object.values(byProduct).reduce((a, b) => a + b, 0)), byProduct, volume: Object.values(acc.volume).reduce((a, b) => a + b, 0) };
+  }
+  return { day, seed, results, bots, fair: lastFair, mark, priceRows, tradeRows, observationRows };
 }
 
 /** Validate orders from a bot or algorithm: integer price, non-zero integer quantity, known symbol. */

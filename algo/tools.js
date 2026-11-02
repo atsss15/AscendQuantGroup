@@ -2,7 +2,7 @@
  * Offline helpers for the algo competition (run with the server stopped, since it keeps its own copy of the state).
  *
  *   npm run algo:reset-data      delete the data days and generate 3 fresh ones (10,000 ticks each), then export
- *   npm run algo:export          zip the data days for players: prices/trades CSVs (Prosperity names),
+ *   npm run algo:export          zip the data days for players: prices/trades/observations CSVs (Prosperity names),
  *                                datamodel.py and the starter trader.py → data/algo/export/AscendAlgo_data.zip
  */
 import fs from 'node:fs';
@@ -30,9 +30,17 @@ function exportData(service) {
   const out = path.join(dir, 'export', 'AscendAlgo_data');
   fs.rmSync(path.join(dir, 'export'), { recursive: true, force: true });
   fs.mkdirSync(out, { recursive: true });
+  const round = service.state.round ?? 1;
   for (const d of days) {
-    fs.copyFileSync(service.dataFile(d.day, 'prices'), path.join(out, `prices_round_0_day_${d.day}.csv`));
-    fs.copyFileSync(service.dataFile(d.day, 'trades'), path.join(out, `trades_round_0_day_${d.day}.csv`));
+    for (const kind of ['prices', 'trades', 'observations']) {
+      let file;
+      try {
+        file = service.dataFile(d.day, kind);
+      } catch {
+        continue; // designs without features have no observations file
+      }
+      fs.copyFileSync(file, path.join(out, `${kind}_round_${round}_day_${d.day}.csv`));
+    }
   }
   fs.copyFileSync(fileURLToPath(new URL('./py/datamodel.py', import.meta.url)), path.join(out, 'datamodel.py'));
   fs.writeFileSync(path.join(out, 'trader.py'), competition.template);

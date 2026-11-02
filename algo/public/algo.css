@@ -32,6 +32,13 @@ table.list tr.me td { background: rgba(88, 166, 255, 0.08); }
 .tabs-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .tabs-row button { font-size: 12px; padding: 4px 10px; }
 .tabs-row button.active { border-color: var(--accent); color: var(--accent); }
+.tabs-row.sub button { font-size: 11px; padding: 3px 8px; }
+.tabs-row.sub:empty { display: none; }
+#lb-chart { width: 100%; background: #0b0e13; border: 1px solid var(--border); border-radius: 6px; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+.legend span.me { color: var(--text); font-weight: 600; }
+.legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
 #chart { width: 100%; background: #0b0e13; border: 1px solid var(--border); border-radius: 6px; }
 .book { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .downloads { display: flex; flex-wrap: wrap; gap: 8px; }

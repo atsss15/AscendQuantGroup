@@ -11,12 +11,13 @@ const PUBLIC = fileURLToPath(new URL('./public', import.meta.url));
  * Players sign in with their exchange account; exchange admin accounts are competition admins.
  *
  * @param {object} server   what createExchangeServer returns
- * @param {{ config: object, dir?: string }} opts
+ * @param {{ config: object, dir?: string, scheduler?: boolean }} opts   scheduler: run days automatically on the admin's schedule
  */
-export function attachAlgo(server, { config, dir = path.resolve('data', 'algo') }) {
+export function attachAlgo(server, { config, dir = path.resolve('data', 'algo'), scheduler = true }) {
   const { app, exchange, authenticate } = server;
-  const service = new AlgoService({ config, dir });
   const names = (id) => exchange.users.get(id)?.name ?? '(removed)';
+  const service = new AlgoService({ config, dir, names });
+  if (scheduler) service.startScheduler();
 
   const api = express.Router();
   api.use(express.json({ limit: '1mb' }));
@@ -44,7 +45,7 @@ export function attachAlgo(server, { config, dir = path.resolve('data', 'algo') 
   api.post('/backtest', wrap((req) => service.backtest(req.user.id, req.body?.code, req.body?.day)));
   api.get('/days/:day/:kind.csv', (req, res) => {
     const kind = req.params.kind;
-    if (!['prices', 'trades', 'own'].includes(kind)) return res.status(404).end();
+    if (!['prices', 'trades', 'observations', 'own'].includes(kind)) return res.status(404).end();
     sendFile(res, () => service.dataFile(req.params.day, kind, req.user.id), `${kind === 'own' ? 'my_trades' : kind}_day_${req.params.day}.csv`);
   });
   api.get('/days/:day/log.txt', (req, res) => sendFile(res, () => service.dataFile(req.params.day, 'log', req.user.id), `my_log_day_${req.params.day}.txt`));
@@ -63,6 +64,17 @@ export function attachAlgo(server, { config, dir = path.resolve('data', 'algo') 
     });
     return { started: true };
   }));
+  admin.post('/new-round', wrap((req) => {
+    // archives the current round and generates fresh data days in the background; the page polls for progress
+    if (service.running || service.preparing) throw new AlgoError('A simulation is running; try again when it finishes');
+    service.lastError = null;
+    service.newRound({ dataDays: Math.min(Math.max(Number(req.body?.dataDays ?? 3), 1), 5) }).catch((err) => {
+      service.lastError = err.message;
+      if (!(err instanceof AlgoError)) console.error('[algo new round]', err);
+    });
+    return { started: true };
+  }));
+  admin.post('/schedule', wrap((req) => service.setSchedule(req.body ?? {})));
   admin.post('/deadline', wrap((req) => service.setDeadline(req.body?.text)));
   admin.post('/practice-mode', wrap((req) => service.setPracticeMode(req.body?.on)));
   admin.post('/days/:day/counts', wrap((req) => service.setDayCounts(req.params.day, req.body?.counts)));
