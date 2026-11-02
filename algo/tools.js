@@ -1,7 +1,7 @@
 /**
  * Offline helpers for the algo competition (run with the server stopped, since it keeps its own copy of the state).
  *
- *   npm run algo:reset-data      delete the data days and generate 3 fresh ones (10,000 ticks each), then export
+ *   npm run algo:reset-data      delete the data days and generate fresh ones up to the first real day (default 3), then export
  *   npm run algo:export          zip every released day for players: prices/trades/observations CSVs (Prosperity names)
  *                                and datamodel.py → data/algo/export/round_<n>_<key>.zip
  */
@@ -37,7 +37,7 @@ if (command === 'reset-data') {
   console.log(`Design: ${competitionSource} · ${competition.ticks} ticks per day`);
   for (const d of service.state.days.filter((x) => x.practice)) service.deleteDay(d.day);
   for (let i = 0; i < count; i++) {
-    const rec = await service.runDay({ practice: true });
+    const rec = await service.runDay({ practice: true, day: service.state.nextDay - count + i }); // oldest first
     console.log(`  data day ${rec.day}: ${rec.trades} trades`);
   }
   await exportData(service);

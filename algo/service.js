@@ -101,8 +101,12 @@ export class AlgoService {
    */
   async runDay({ practice = false, day: requested } = {}) {
     if (this.running) throw new AlgoError(`Day ${this.running.day} is already running`);
-    // data days sit before the first competition day (…, -2, -1, then Day 0 or 1); an extra data day goes before the earliest
-    const day = practice ? requested ?? Math.min(this.state.nextDay, ...this.state.days.map((d) => d.day)) - 1 : this.state.nextDay;
+    // data days lead up to the first competition day; an extra one continues the series from the latest day
+    // (so only before the first competition day), and the first competition day moves after it
+    if (practice && requested == null && this.state.days.some((d) => !d.practice)) {
+      throw new AlgoError('Data days can only be added before the first real day runs');
+    }
+    const day = practice ? requested ?? (this.state.days.length ? Math.max(...this.state.days.map((d) => d.day)) + 1 : this.state.nextDay - 1) : this.state.nextDay;
     // continue from where the previous day ended (a round's first day starts fresh)
     const carry = this.worldState(day - 1)?.out ?? null;
     const seed = randomInt(1, 2 ** 31);
@@ -134,7 +138,7 @@ export class AlgoService {
       this.state.days = this.state.days.filter((d) => d.day !== day);
       this.state.days.push(record);
       this.state.days.sort((a, b) => a.day - b.day);
-      if (!practice) this.state.nextDay = day + 1;
+      if (!practice || day >= this.state.nextDay) this.state.nextDay = day + 1;
       this.save();
       return record;
     } finally {
@@ -225,12 +229,12 @@ export class AlgoService {
 
   /**
    * Retire everything from the current round and start fresh: the state and day files move to
-   * archive/<time>/, then `dataDays` bots-only days (firstDay - dataDays … firstDay - 1) are generated with the
+   * archive/<time>/, then `dataDays` bots-only days (firstDay - dataDays … firstDay - 1, e.g. -14 … 0) are generated with the
    * current design for players to study, and the first competition day is `firstDay`.
    * Players keep the code in their editor; submissions, days, results and the leaderboard start over.
    * A round that never had a competition day is redone under the same number.
    */
-  async newRound({ dataDays = 3, firstDay = 0 } = {}) {
+  async newRound({ dataDays = 3, firstDay = 1 } = {}) {
     if (this.running || this.preparing) throw new AlgoError('A simulation is running; try again when it finishes');
     this.preparing = { startedAt: Date.now(), dataDays, done: 0 };
     try {

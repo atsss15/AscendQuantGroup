@@ -77,7 +77,7 @@ export function attachAlgo(server, { config, dir = path.resolve('data', 'algo'),
     if (service.running || service.preparing) throw new AlgoError('A simulation is running; try again when it finishes');
     service.lastError = null;
     const dataDays = Math.min(Math.max(Math.round(Number(req.body?.dataDays) || 3), 1), 30);
-    service.newRound({ dataDays, firstDay: Number.isInteger(req.body?.firstDay) ? req.body.firstDay : 0 }).catch((err) => {
+    service.newRound({ dataDays, firstDay: Number.isInteger(req.body?.firstDay) ? req.body.firstDay : 1 }).catch((err) => {
       service.lastError = err.message;
       if (!(err instanceof AlgoError)) console.error('[algo new round]', err);
     });

@@ -48,8 +48,8 @@ Sign in as Attis. The admin panel appears at the top of `/algo`.
 
 1. **Start new round…**
    - **Archives the old round:** days, results, the leaderboard and submissions move to `data/algo/archive/<time>/` on the server.
-   - **Generates data days:** it asks how many (default 14, i.e. two weeks), numbered −14 to −1. These are bots-only days for players to study and backtest on, generated oldest first with the current design, each continuing the one before.
-   - **Day 0:** the first real day.
+   - **Generates data days:** it asks how many (default 15, i.e. about two weeks), numbered −14 to 0. These are bots-only days for players to study and backtest on, generated oldest first with the current design, each continuing the one before.
+   - **Day 1:** the first real day.
    - **Round numbering:** a round that never ran a day is redone under the same number.
 2. **Schedule.** Tick **Run automatically every day at 12:00** (New York time) and pick a start date.
    - A gap of a couple of days after a new round gives players time to research.
@@ -58,7 +58,7 @@ Sign in as Attis. The admin panel appears at the top of `/algo`.
 3. **Reset everyone's editor to the template…** puts the round's sample `trader.py` in every editor. Everyone's previous code is saved to `data/algo/archive/editors-<time>.json` first.
 4. **Other controls:**
    - **Run Day N now** runs a day immediately.
-   - **Generate data day** adds another bots-only day.
+   - **Add a data day** adds another bots-only day at the end of the series, continuing from the latest day. The first real day moves after it. It's only possible before the first real day runs.
    - **Delete this day** removes a bad run so it can run again.
    - The **practice week** checkbox (off after a new round) and each day's **Count this day** toggle decide what counts toward the leaderboard.
    - The panel also shows every submission and each day's results, code and logs, plus the [hosting cost](#hosting-247-on-flyio).
@@ -82,7 +82,7 @@ Each day is 10,000 ticks. Each tick ([algo/sim.js](algo/sim.js)):
 
 So both price and code efficiency matter.
 
-**One continuous market:** each day picks up exactly where the previous one ended, including prices, weather and everything else the design tracks. So the data days and the competition days form one continuous series: Day −13 opens where Day −14 closed, and Day 0 opens where Day −1 closed. The server keeps each day's start and end state in `days/<day>/world.json`.
+**One continuous market:** each day picks up exactly where the previous one ended, including prices, weather and everything else the design tracks. So the data days and the competition days form one continuous series: Day −13 opens where Day −14 closed, and Day 1 opens where Day 0 closed. The server keeps each day's start and end state in `days/<day>/world.json`.
 
 At the end of the day, positions are marked at fair value. Prices, bots and matching each use their own seeded random stream, and a backtest starts from the same state as the real day, so it replays that day's prices and bot behaviour exactly.
 

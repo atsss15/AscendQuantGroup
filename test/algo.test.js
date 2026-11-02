@@ -256,9 +256,9 @@ test('new round: archives everything, keeps editors, generates fresh data days',
   await svc.runDay();
   svc.setSchedule({ enabled: true, startDate: '2026-11-04' });
   const res = await svc.newRound({ dataDays: 2 });
-  assert.deepEqual(res.dataDays, [-2, -1], 'data days lead up to Day 0');
+  assert.deepEqual(res.dataDays, [-1, 0], 'data days lead up to Day 0');
   assert.equal(svc.state.round, 1, 'the first new round after setup is round 1');
-  assert.equal(svc.state.nextDay, 0, 'the first real day is Day 0');
+  assert.equal(svc.state.nextDay, 1, 'the first real day is Day 1');
   assert.equal(svc.state.practiceMode, false);
   assert.deepEqual(svc.state.submissions, {}, 'old submissions are retired');
   assert.equal(svc.leaderboard((id) => id).length, 0);
@@ -270,11 +270,11 @@ test('new round: archives everything, keeps editors, generates fresh data days',
 
   const redo = await svc.newRound({ dataDays: 3 });
   assert.equal(svc.state.round, 1, 'a round that never ran a day is redone under the same number');
-  assert.deepEqual(redo.dataDays, [-3, -2, -1]);
+  assert.deepEqual(redo.dataDays, [-2, -1, 0]);
   const file = await svc.dataZip();
   assert.match(path.basename(file), /^round_1_\w+\.zip$/);
   const raw = fs.readFileSync(file).toString('latin1');
-  assert.ok(raw.includes('round_1/prices_round_1_day_-3.csv') && raw.includes('round_1/datamodel.py'), 'files are named by round and day');
+  assert.ok(raw.includes('round_1/prices_round_1_day_-2.csv') && raw.includes('round_1/datamodel.py'), 'files are named by round and day');
   assert.equal(await svc.dataZip(), file, 'cached until the days change');
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -282,19 +282,23 @@ test('new round: archives everything, keeps editors, generates fresh data days',
 test('days continue one another: each opens where the last closed, and backtests replay from that start', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'algo-carry-'));
   const svc = new AlgoService({ config: { ...small, ticks: 200 }, dir });
-  await svc.newRound({ dataDays: 3 });
+  await svc.newRound({ dataDays: 2 }); // Days -1 and 0
+  const extra = await svc.runDay({ practice: true });
+  assert.equal(extra.day, 1, 'an added data day continues the series from the latest day');
+  assert.equal(svc.state.nextDay, 2, 'and the first real day moves after it');
   svc.submit('u1', competition.template);
-  const day0 = await svc.runDay();
-  assert.equal(day0.day, 0);
+  const first = await svc.runDay();
+  assert.equal(first.day, 2);
   const mids = (day) => fs.readFileSync(svc.dataFile(day, 'prices'), 'utf8').trim().split('\n').slice(1)
     .map((l) => l.split(';')).filter((r) => r[2] === 'ASCEND').map((r) => Number(r[15]));
-  for (const day of [-2, -1, 0]) {
+  for (const day of [0, 1, 2]) {
     assert.deepEqual(svc.worldState(day).in, svc.worldState(day - 1).out, `day ${day} starts where day ${day - 1} ended`);
     assert.ok(Math.abs(mids(day)[0] - mids(day - 1).at(-1)) < 40, `day ${day} opens near the previous close`);
   }
-  assert.equal(svc.worldState(-3).in, null, "the round's first day starts fresh");
-  const bt = await svc.backtest('u1', competition.template, 0);
-  assert.equal(bt.pnl, day0.results.u1.pnl, 'a backtest of Day 0 replays it exactly (same start, same seed)');
+  assert.equal(svc.worldState(-1).in, null, "the round's first day starts fresh");
+  await assert.rejects(svc.runDay({ practice: true }), /before the first real day/, 'no data days after real ones');
+  const bt = await svc.backtest('u1', competition.template, 2);
+  assert.equal(bt.pnl, first.results.u1.pnl, 'a backtest of a real day replays it exactly (same start, same seed)');
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

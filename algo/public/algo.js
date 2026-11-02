@@ -564,12 +564,12 @@
       }
     };
     const newRound = async () => {
-      const answer = prompt('Start a new round?\n\nThis retires everything from the current round: days, results, the leaderboard and everyone’s submissions move to an archive on the server. Then new data days are generated with the current design, and the first real day is Day 0. Players keep the code in their editors. Set the schedule’s start date to give players time to research.\n\nHow many data days (bots only, 10,000 ticks each)?', '14');
+      const answer = prompt('Start a new round?\n\nThis retires everything from the current round: days, results, the leaderboard and everyone’s submissions move to an archive on the server. Then new data days are generated with the current design, numbered up to Day 0, and the first real day is Day 1. Players keep the code in their editors. Set the schedule’s start date to give players time to research.\n\nHow many data days (bots only, 10,000 ticks each)?', '15');
       if (answer == null) return;
       const dataDays = Number(answer);
       if (!Number.isInteger(dataDays) || dataDays < 1 || dataDays > 30) return toast('Pick 1 to 30 data days', 'error');
       try {
-        await api('POST', '/admin/new-round', { dataDays, firstDay: 0 });
+        await api('POST', '/admin/new-round', { dataDays, firstDay: 1 });
         toast('New round started: generating data days');
         pollAdmin();
       } catch (err) {
@@ -589,7 +589,7 @@
 
     const run = async (practice) => {
       const what = practice
-        ? 'a data day (bots only, released for players to study and backtest on)'
+        ? `Data day ${Math.max(...a.days.map((d) => d.day), a.nextDay - 1) + (a.days.length ? 1 : 0)} (bots only, continuing from the latest day; the first real day moves after it)`
         : `Day ${a.nextDay} with ${a.submissions.length} submitted algorithm${a.submissions.length === 1 ? '' : 's'}${a.practiceMode ? ' as a practice day (won’t count)' : ''}`;
       if (!confirm(`Simulate ${what} now? Its data and results are released to players right away.`)) return;
       try {
@@ -610,7 +610,7 @@
             h('div', { class: 'progress-bar' }, h('div', { style: `width:${Math.round(running.progress * 100)}%` })))
         : h('div', { class: 'toolbar' },
             h('button', { type: 'button', class: 'primary', disabled: !!a.preparing, onclick: () => run(false) }, `Run Day ${a.nextDay} now${a.practiceMode ? ' (practice)' : ''}`),
-            h('button', { type: 'button', disabled: !!a.preparing, onclick: () => run(true) }, 'Generate data day'),
+            h('button', { type: 'button', disabled: !!a.preparing || a.days.some((d) => !d.practice), onclick: () => run(true) }, 'Add a data day'),
             h('span', { class: 'grow' }),
             h('button', { type: 'button', class: 'danger', disabled: !!a.preparing, onclick: newRound }, 'Start new round…'),
             a.lastError ? h('span', { class: 'error small' }, `Last run failed: ${a.lastError}`) : ''),
