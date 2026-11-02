@@ -183,8 +183,8 @@ export async function simulateDay({ config, day, seed, agents = [], record = tru
       total += pnl;
     }
     const errors = [...st.errors.values()].map((e) => `[${e.timestamp}] ${e.msg}${e.count > 1 ? `\n    (happened ${e.count} times; first shown)` : ''}`);
-    // Trader.run CPU time per call, to the microsecond
-    const speed = st.cpu.n ? { avgMs: Math.round(st.cpu.total / st.cpu.n) / 1000, maxMs: st.cpu.max / 1000 } : null;
+    // Trader.run CPU time per call (ms, to 0.1µs)
+    const speed = st.cpu.n ? { avgMs: Math.round((st.cpu.total / st.cpu.n) * 10) / 10000, maxMs: Math.round(st.cpu.max * 10) / 10000 } : null;
     results[a.name] = { pnl: round2(total), byProduct, errors, logs: st.logs.slice(-200), rejected: st.rejected, fills: st.fills, speed };
   }
   // the bots' own books, for checking a design (never shown to players)

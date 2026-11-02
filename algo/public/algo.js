@@ -61,6 +61,7 @@
   const time = (ts) => (ts ? new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '');
   // a scheduled time, shown in the schedule's time zone (e.g. "Wed, Nov 4, 12:00 PM EST")
   const when = (ms, timeZone) => new Date(ms).toLocaleString([], { timeZone, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
+  const duration = (ms) => (ms < 1 ? `${(ms * 1000).toFixed(1)}µs` : `${ms.toFixed(2)}ms`);
   const COLORS = ['#58a6ff', '#3fb950', '#f85149', '#d29922', '#bc8cff', '#39c5cf', '#ff7b72', '#ffa657', '#7ee787', '#f778ba', '#a5d6ff', '#e3b341', '#56d364', '#8b949e'];
 
   function download(name, text, type = 'text/csv') {
@@ -218,7 +219,7 @@
       h('div', { class: 'toolbar' },
         h('span', { class: `pnl-big ${cls(r.pnl)}` }, signed(r.pnl)),
         h('span', { class: 'muted' }, `P&L on ${dayLabel(store.me.days.find((d) => d.day === r.day) ?? { day: r.day })} · ran in ${r.seconds.toFixed(1)}s`),
-        r.speed ? h('span', { class: 'muted', title: 'CPU time per Trader.run call. At the same price, faster algorithms are earlier in the queue.' }, ` · Trader.run CPU ${r.speed.avgMs.toFixed(3)}ms avg, ${r.speed.maxMs.toFixed(3)}ms max`) : ''),
+        r.speed ? h('span', { class: 'muted', title: 'CPU time per Trader.run call. At the same price, faster algorithms are earlier in the queue.' }, ` · Trader.run CPU ${duration(r.speed.avgMs)} avg, ${duration(r.speed.maxMs)} max`) : ''),
       table(['product', 'P&L', 'end position', 'volume'], products, '', [1, 2, 3]),
       r.rejected ? h('p', { class: 'muted small' }, `${r.rejected} order batches were rejected for breaking position limits.`) : '',
       counterparties(r),

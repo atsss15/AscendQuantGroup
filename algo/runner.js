@@ -116,9 +116,9 @@ export async function startAgent({ name, code, timeLimitMs = 400, cpuSeconds = 3
       const logs = startupLogs.length ? [...startupLogs, ...(reply.logs ?? [])] : reply.logs;
       startupLogs = [];
       if (reply.ms > timeLimitMs) {
-        return { orders: [], traderData: reply.traderData, logs, error: `Trader.run took ${reply.ms}ms (limit ${timeLimitMs}ms); orders ignored this tick`, cpuUs: reply.cpu_us };
+        return { orders: [], traderData: reply.traderData, logs, error: `Trader.run took ${reply.ms}ms (limit ${timeLimitMs}ms); orders ignored this tick`, cpuUs: reply.cpu_ns / 1000 };
       }
-      return { orders: reply.orders, traderData: reply.traderData, logs, error: reply.error, cpuUs: reply.cpu_us };
+      return { orders: reply.orders, traderData: reply.traderData, logs, error: reply.error, cpuUs: reply.cpu_ns / 1000 };
     },
     close,
   };
