@@ -197,6 +197,20 @@ export class AlgoService {
     this.save();
   }
 
+  /** Put the starting template in everyone's editor; their current code is saved to archive/editors-<time>.json first. */
+  resetDrafts() {
+    const count = Object.keys(this.state.drafts).length;
+    if (count) {
+      const dir = path.join(this.dir, 'archive');
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, `editors-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`);
+      fs.writeFileSync(file, JSON.stringify(this.state.drafts, null, 1));
+    }
+    this.state.drafts = {};
+    this.save();
+    return { reset: count };
+  }
+
   // ---------------------------------------------------------------- rounds
 
   /**

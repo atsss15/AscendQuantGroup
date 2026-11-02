@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { AlgoService, AlgoError } from './service.js';
 import { ExchangeError } from '../exchange/exchange.js';
+import { hostingInfo } from '../deploy/hosting.js';
 
 const PUBLIC = fileURLToPath(new URL('./public', import.meta.url));
 
@@ -83,6 +84,8 @@ export function attachAlgo(server, { config, dir = path.resolve('data', 'algo'),
     return { started: true };
   }));
   admin.post('/schedule', wrap((req) => service.setSchedule(req.body ?? {})));
+  admin.post('/reset-editors', wrap(() => service.resetDrafts()));
+  admin.get('/hosting', wrap(() => hostingInfo()));
   admin.post('/deadline', wrap((req) => service.setDeadline(req.body?.text)));
   admin.post('/practice-mode', wrap((req) => service.setPracticeMode(req.body?.on)));
   admin.post('/days/:day/counts', wrap((req) => service.setDayCounts(req.params.day, req.body?.counts)));

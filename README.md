@@ -86,6 +86,7 @@ npm run migrate -- https://ascend-exchange.fly.dev         # copy this laptop's 
 - **Logs:** `fly logs`.
 - **Status:** `fly status`.
 - **More memory:** `fly scale memory 2048`.
+- **Cost:** the algo admin panel shows an estimate of this month's Fly bill so far. It's worked out from the machine size, the volume and Fly's list prices, and links to the exact bill on the dashboard. For billing status and data transfer as well, give the server a read-only token: `fly secrets set FLY_API_TOKEN="$(fly tokens create readonly personal --expiry 8760h)"`.
 - **Backups:** Fly snapshots the volume daily. `npm run migrate` can also copy data to any server that's running.
 - **Admin work:** use the admin pages on the fly.dev link, such as **Start new round…** and the run schedule. The `npm run algo:*` tools only work on a local copy.
 
@@ -146,8 +147,9 @@ This is an IMC Prosperity-style competition on the same server and link. Players
 
 1. **Start new round…** (admin panel) retires the current round: days, results, the leaderboard and submissions move to `data/algo/archive/<time>/` on the server. It then generates fresh data days with the current design (it asks how many, default 14 = two weeks, numbered −14 to −1), and the first real day is Day 0. Players keep the code in their editors. Data days run the bots only; players get their prices, trades and features to study and backtest on, one day at a time or all at once with **all days (zip)**.
 2. **Schedule:** tick **Run automatically every day at 12:00** and pick a start date. Leaving a gap after a new round gives players time to research. The day then runs by itself every day at that time (New York time), with every player's latest submission, and releases the results and that day's data right away. The page shows players when the next run is. A server that was down at the scheduled time catches up later the same day.
-3. **Run Day N now** runs a day immediately instead. **Delete this day** removes a bad run so you can run it again.
-4. **Practice week:** while that admin checkbox is on, days run and show standings but don't count toward the cumulative leaderboard (a new round turns it off). Each day also has a **Count this day** / **Make it practice** toggle.
+3. **Reset everyone's editor to the template…** puts the design's starting `trader.py` (a commented sample of every input) into every player's editor. Their previous code is saved to `data/algo/archive/editors-<time>.json` first.
+4. **Run Day N now** runs a day immediately instead. **Delete this day** removes a bad run so you can run it again.
+5. **Practice week:** while that admin checkbox is on, days run and show standings but don't count toward the cumulative leaderboard (a new round turns it off). Each day also has a **Count this day** / **Make it practice** toggle.
 
 **What players get:**
 

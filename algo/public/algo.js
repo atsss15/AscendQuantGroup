@@ -577,6 +577,16 @@
       }
     };
 
+    const resetEditors = async () => {
+      if (!confirm('Replace the code in everyone’s editor with the current starting template?\n\nTheir current code is saved to an archive file on the server first. Submissions are not affected.')) return;
+      try {
+        const r = await api('POST', '/admin/reset-editors');
+        toast(`Reset ${r.reset} editors to the template`);
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    };
+
     const run = async (practice) => {
       const what = practice
         ? 'a data day (bots only, released for players to study and backtest on)'
@@ -623,9 +633,32 @@
           toast('Deadline updated');
           load();
         } }, 'Save')),
+      h('div', { id: 'hosting', class: 'toolbar small muted' }, 'Hosting cost: loading…'),
+      h('div', { class: 'toolbar small' }, h('button', { type: 'button', class: 'small', onclick: resetEditors }, 'Reset everyone’s editor to the template…')),
       h('details', {}, h('summary', {}, `Submissions (${a.submissions.length})`), table(['player', 'submitted', 'lines', ''], subs, 'Nobody has submitted yet.', [2])),
       h('details', {}, h('summary', {}, `Days (${a.days.length})`), days.length ? days : h('p', { class: 'muted small' }, 'No days yet. Generate data days so players have data to start with.')),
     );
+    renderHosting();
+  }
+
+  /** Fly.io hosting cost (estimate from machine size and list prices; billing status if the server has a read-only token). */
+  async function renderHosting() {
+    const box = $('#hosting');
+    if (!box) return;
+    try {
+      const x = store.hosting ??= await api('GET', '/admin/hosting');
+      if (!x.onFly) return fill(box, 'Hosting cost: not running on Fly.io');
+      const usd = (n) => `$${n.toFixed(2)}`;
+      fill(box,
+        h('b', {}, 'Fly.io: '), `~${usd(x.estimate.monthToDate)} so far this month · ~${usd(x.estimate.perMonth)}/month while it runs`,
+        ` · ${x.machines.map((m) => m.size).join(', ')}${x.volumes.length ? ` + ${x.volumes.map((v) => `${v.sizeGb} GB`).join(', ')} volume` : ''}`,
+        x.dataOutGb != null ? ` · ${x.dataOutGb} GB sent out` : '',
+        x.billing ? ` · billing ${String(x.billing.status).toLowerCase()}, card ${x.billing.cardOnFile ? 'on file' : 'missing'}, credits ${x.billing.credits}` : '',
+        ' · ', h('a', { href: x.dashboard, target: '_blank', rel: 'noopener' }, 'exact bill'),
+        h('span', { title: `Estimated from ${x.prices}${x.errors?.length ? `. ${x.errors.join('; ')}` : ''}${x.detailed ? '' : '. Add a read-only FLY_API_TOKEN secret for billing status and data transfer.'}` }, ' ⓘ'));
+    } catch (err) {
+      fill(box, `Hosting cost: ${err.message}`);
+    }
   }
 
   let pollTimer = null;

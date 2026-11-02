@@ -279,6 +279,37 @@ test('new round: archives everything, keeps editors, generates fresh data days',
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('admin can put the template back in every editor; the old code is archived first', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'algo-editors-'));
+  const svc = new AlgoService({ config: small, dir });
+  svc.saveDraft('u1', '# my old strategy');
+  assert.deepEqual(svc.resetDrafts(), { reset: 1 });
+  assert.equal(svc.draft('u1').code, small.template);
+  const archived = fs.readdirSync(path.join(dir, 'archive')).filter((f) => f.startsWith('editors-'));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'archive', archived[0]), 'utf8')).u1.code, '# my old strategy');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('hosting cost: estimate from the machine size and list prices on Fly; nothing off Fly', async () => {
+  const { hostingInfo, PRICES } = await import('../deploy/hosting.js');
+  const saved = { app: process.env.FLY_APP_NAME, mem: process.env.FLY_VM_MEMORY_MB, token: process.env.FLY_API_TOKEN };
+  delete process.env.FLY_APP_NAME;
+  assert.equal((await hostingInfo()).onFly, false);
+  Object.assign(process.env, { FLY_APP_NAME: 'test-app', FLY_VM_MEMORY_MB: '1024' });
+  delete process.env.FLY_API_TOKEN;
+  const mid = Date.UTC(2026, 10, 16); // halfway through November
+  const x = await hostingInfo({ now: mid, dataDir: os.tmpdir() });
+  const cpus = os.cpus().length;
+  const machine = cpus * PRICES.sharedCpuMonth + Math.max(0, 1 - 0.25 * cpus) * PRICES.extraRamGbMonth;
+  assert.equal(x.machines[0].perMonth, Math.round(machine * 100) / 100);
+  assert.ok(Math.abs(x.estimate.monthToDate - x.estimate.perMonth / 2) < 0.02, 'half the month, half the cost');
+  assert.equal(x.detailed, false);
+  for (const [k, v] of [['FLY_APP_NAME', saved.app], ['FLY_VM_MEMORY_MB', saved.mem], ['FLY_API_TOKEN', saved.token]]) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+});
+
 test('end to end over HTTP', { timeout: 30000 }, async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'algo-http-'));
   const server = createExchangeServer(platform, { dataFile: null, adminPassword: 'admin-pw', quiet: true, handleSignals: false });
