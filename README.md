@@ -162,7 +162,7 @@ Use this for development, or for a game night without the cloud. It keeps its ow
 
 All three apps share the exchange's accounts, except ranking, which uses names.
 
-- **Who can sign in:** the list is in [server.js](server.js). It currently holds Ashley, Paul, Frank, Jay, Thomas, Attis, Susie, Derrick, Arien, Buju, Jerry, Harry and Carl. Nobody else can sign in. Add accounts in the exchange admin panel or in `server.js`.
+- **Who can sign in:** the list is in [server.js](server.js). It currently holds Ashley, Paul, Frank, Jay, Thomas, Attis, Susie, Derrick, Arien, Buju, Jerry, Harry, Carl and Felix. Nobody else can sign in. Add accounts in the exchange admin panel or in `server.js`.
 - **First sign-in:** pick your name and type any password (4+ characters). That becomes your password. The browser remembers you, and signing in on `/algo` or `/` signs you in on both.
 - **Forgot your password:** ask Attis to **Reset password**, then sign in again with a new one.
 - **Admin:** Attis is the admin account. Its password is always `ADMIN_PASSWORD`. `/admin` also has a plain admin-password login.

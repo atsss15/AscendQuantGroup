@@ -22,7 +22,7 @@ export const platform = {
   },
   admins: ['Attis'], // signs in with ADMIN_PASSWORD (set in .env) and gets the admin controls
   // Each person sets their own password the first time they sign in.
-  accounts: ['Ashley', 'Paul', 'Frank', 'Jay', 'Thomas', 'Attis', 'Susie', 'Derrick', 'Arien', 'Buju', 'Jerry', 'Harry', 'Carl'],
+  accounts: ['Ashley', 'Paul', 'Frank', 'Jay', 'Thomas', 'Attis', 'Susie', 'Derrick', 'Arien', 'Buju', 'Jerry', 'Harry', 'Carl', 'Felix'],
   games: [smash],
   importFrom: ['data/smash.json'], // save file from before sessions existed
 };
