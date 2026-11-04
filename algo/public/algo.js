@@ -402,6 +402,7 @@
     };
     canvas.onmousemove = (e) => {
       const k = Math.min(n, Math.max(1, Math.round(((e.offsetX * dpr - padL) / (w - padL - 10 * dpr)) * n)));
+      ctx.clearRect(0, 0, w, hgt); // the canvas is transparent: drawing the snapshot alone would leave old crosshairs
       ctx.drawImage(base, 0, 0);
       ctx.strokeStyle = 'rgba(210,153,34,0.8)';
       ctx.lineWidth = dpr;
@@ -428,6 +429,7 @@
       tip.style.left = `${left + tip.offsetWidth > canvas.clientWidth ? e.offsetX - tip.offsetWidth - 14 : left}px`;
     };
     canvas.onmouseleave = () => {
+      ctx.clearRect(0, 0, w, hgt);
       ctx.drawImage(base, 0, 0);
       tip.hidden = true;
     };
