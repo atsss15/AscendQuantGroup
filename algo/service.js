@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { randomInt, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -32,7 +33,11 @@ export class AlgoService {
     this.names = names; // userId → display name (players see each other's names as counterparties)
     this.running = null; // { day, practice, progress, startedAt }
     this.preparing = null; // { startedAt } while a new round's data days are generated
+    // backtests at once: about one per core (each runs a Python process); a short line waits for a free slot
+    this.slots = Number(process.env.BACKTEST_SLOTS) || Math.max(2, os.availableParallelism());
     this.backtests = 0;
+    this.waiting = [];
+    this.curves = new Map(); // day → each player's P&L through the day (see dayCurves)
     this.state = freshState();
     const file = path.join(dir, 'state.json');
     if (fs.existsSync(file)) Object.assign(this.state, JSON.parse(fs.readFileSync(file, 'utf8')));
@@ -79,18 +84,35 @@ export class AlgoService {
   /** Replay a released day with this code and the bots only. Returns this player's P&L, errors and logs. */
   async backtest(userId, code, day) {
     const d = this.getDay(day);
-    if (this.backtests >= 3) throw new AlgoError('The backtester is busy. Try again in a few seconds.');
-    this.backtests++;
-    const agent = await startAgent({ name: userId, code: checkCode(code), timeLimitMs: this.config.timeLimitMs });
+    const clean = checkCode(code);
+    await this.backtestSlot();
+    let agent;
     try {
+      agent = await startAgent({ name: userId, code: clean, timeLimitMs: this.config.timeLimitMs });
       const started = Date.now();
       const res = await simulateDay({ config: this.config, day: d.day, seed: d.seed, agents: [agent], record: false, carry: this.worldState(d.day)?.in ?? null });
       // fills: [timestamp, product, signed quantity, price, counterparty]
       return { day: d.day, seconds: (Date.now() - started) / 1000, ...res.results[userId] };
     } finally {
-      agent.close();
-      this.backtests--;
+      agent?.close();
+      this.releaseSlot();
     }
+  }
+
+  /** Take a backtest slot, waiting in line if they're all busy (the line is short, so a wait is a backtest or two). */
+  async backtestSlot() {
+    if (this.backtests < this.slots) {
+      this.backtests++;
+      return;
+    }
+    if (this.waiting.length >= this.slots * 2) throw new AlgoError('The backtester is busy. Try again in a few seconds.');
+    await new Promise((resolve) => this.waiting.push(resolve));
+  }
+
+  releaseSlot() {
+    const next = this.waiting.shift();
+    if (next) next(); // the slot passes straight to the next in line
+    else this.backtests--;
   }
 
   // ---------------------------------------------------------------- admin
@@ -385,6 +407,79 @@ export class AlgoService {
       .sort((a, b) => b.total - a.total);
   }
 
+  /**
+   * The leaderboard's lines: each player's cumulative P&L through the days that count, sampled every few ticks
+   * (at most LINE_POINTS per player in all). A player who sat a day out stays flat through it.
+   */
+  leaderboardLines(names) {
+    const comp = this.state.days.filter((d) => !d.practice && d.counts !== false);
+    const ids = [...new Set(comp.flatMap((d) => Object.keys(d.results)))];
+    const total = Object.fromEntries(ids.map((id) => [id, 0]));
+    const pts = Object.fromEntries(ids.map((id) => [id, []]));
+    const days = comp.map((d) => {
+      const curves = this.dayCurves(d);
+      const n = Math.min(Object.values(curves)[0]?.length ?? CURVE_POINTS, Math.max(20, Math.floor(LINE_POINTS / comp.length)));
+      for (const id of ids) {
+        const c = curves[id];
+        for (let j = 0; j < n; j++) pts[id].push(round2(total[id] + (c ? c[Math.round(((j + 1) * c.length) / n) - 1] : 0)));
+        total[id] += d.results[id]?.pnl ?? 0;
+      }
+      return { day: d.day, points: n };
+    });
+    return { days, players: ids.map((id) => ({ userId: id, name: names(id), pts: pts[id] })) };
+  }
+
+  /**
+   * Each player's P&L through one competition day, CURVE_POINTS samples: their fills marked to the mid price
+   * (public, unlike fair value), with the last sample the day's official P&L. Built from the day's files.
+   */
+  dayCurves(d) {
+    const key = `${d.day}:${d.ranAt}`;
+    if (this.curves.has(key)) return this.curves.get(key);
+    const dir = this.dayDir(d.day);
+    if (!fs.existsSync(path.join(dir, 'prices.csv'))) return {};
+    const [head, ...rows] = fs.readFileSync(path.join(dir, 'prices.csv'), 'utf8').trim().split('\n');
+    const col = Object.fromEntries(head.split(';').map((c, i) => [c, i]));
+    // the mid price of every product at each sample's end (the last known mid if the book was one-sided)
+    const ticks = this.config.ticks;
+    const step = this.config.tickStep ?? 100;
+    const every = Math.max(1, Math.round(ticks / CURVE_POINTS));
+    const ends = Array.from({ length: Math.ceil(ticks / every) }, (_, j) => Math.min((j + 1) * every, ticks) * step - step);
+    const mid = {};
+    const marks = [];
+    for (const line of rows) {
+      const v = line.split(';');
+      const t = Number(v[col.timestamp]);
+      while (marks.length < ends.length && t > ends[marks.length]) marks.push({ ...mid });
+      if (v[col.mid_price] !== '') mid[v[col.product]] = Number(v[col.mid_price]);
+    }
+    while (marks.length < ends.length) marks.push({ ...mid });
+
+    const curves = {};
+    for (const id of Object.keys(d.results)) {
+      const file = path.join(dir, 'own', `${id}.csv`);
+      const fills = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').slice(1).map((l) => l.split(';')) : [];
+      const cash = {};
+      const pos = {};
+      let f = 0;
+      curves[id] = ends.map((end, j) => {
+        // own trades: timestamp;buyer;seller;symbol;currency;price;quantity
+        for (; f < fills.length && Number(fills[f][0]) <= end; f++) {
+          const [, buyer, , symbol, , price, qty] = fills[f];
+          const q = buyer === 'SUBMISSION' ? Number(qty) : -Number(qty);
+          pos[symbol] = (pos[symbol] ?? 0) + q;
+          cash[symbol] = (cash[symbol] ?? 0) - q * Number(price);
+        }
+        let v = 0;
+        for (const s of Object.keys(pos)) v += cash[s] + pos[s] * (marks[j][s] ?? 0);
+        return Math.round(v);
+      });
+      curves[id][ends.length - 1] = d.results[id]?.pnl ?? 0;
+    }
+    this.curves.set(key, curves);
+    return curves;
+  }
+
   /** Standings for the most recent competition day, counted or not. */
   latestDay(names) {
     const d = [...this.state.days].reverse().find((x) => !x.practice);
@@ -506,3 +601,5 @@ function checkCode(code) {
 }
 
 const round2 = (n) => Math.round(n * 100) / 100;
+const CURVE_POINTS = 1000; // samples per day for the leaderboard's lines (every 10 ticks of 10,000)
+const LINE_POINTS = 2000; // samples per player in all, however many days count

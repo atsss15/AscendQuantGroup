@@ -41,6 +41,7 @@ export function attachAlgo(server, { config, dir = path.resolve('data', 'algo'),
   });
 
   api.get('/me', wrap((req) => ({ name: req.user.name, isAdmin: req.isAdmin, ...service.playerView(req.user.id, names) })));
+  api.get('/leaderboard-lines', wrap(() => service.leaderboardLines(names)));
   api.put('/draft', wrap((req) => service.saveDraft(req.user.id, req.body?.code)));
   api.post('/submit', wrap((req) => service.submit(req.user.id, req.body?.code)));
   api.post('/backtest', wrap((req) => service.backtest(req.user.id, req.body?.code, req.body?.day)));

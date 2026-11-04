@@ -135,6 +135,13 @@ test('service: practice data, submissions, a competition day, leaderboard, backt
 
   const board = svc.leaderboard((id) => id.toUpperCase());
   assert.deepEqual(board.map((r) => r.name).sort(), ['U1', 'U2']);
+  const lines = svc.leaderboardLines((id) => id);
+  assert.deepEqual(lines.days, [{ day: 1, points: Math.min(1000, small.ticks) }]);
+  const u1 = lines.players.find((p) => p.userId === 'u1').pts;
+  assert.equal(u1.length, lines.days[0].points);
+  assert.equal(u1.at(-1), day1.results.u1.pnl, 'the line ends at the official P&L');
+  assert.ok(u1.some((v) => v !== 0 && v !== u1.at(-1)), 'and moves through the day');
+  assert.ok(lines.players.find((p) => p.userId === 'u2').pts.every((v) => v === 0));
 
   const bt = await svc.backtest('u1', competition.template, 1);
   assert.equal(bt.day, 1);

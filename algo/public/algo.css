@@ -34,7 +34,15 @@ table.list tr.me td { background: rgba(88, 166, 255, 0.08); }
 .tabs-row button.active { border-color: var(--accent); color: var(--accent); }
 .tabs-row.sub button { font-size: 11px; padding: 3px 8px; }
 .tabs-row.sub:empty { display: none; }
-#lb-chart { width: 100%; background: #0b0e13; border: 1px solid var(--border); border-radius: 6px; }
+#lb-chart { width: 100%; background: #0b0e13; border: 1px solid var(--border); border-radius: 6px; display: block; cursor: crosshair; }
+.lb-wrap { position: relative; }
+.lb-tip { position: absolute; top: 8px; pointer-events: none; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 12px; display: grid; gap: 2px; min-width: 170px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4); }
+.lb-tip[hidden] { display: none; }
+.lb-tip > div { display: flex; align-items: center; gap: 6px; }
+.lb-tip > div span { flex: 1; }
+.lb-tip > div.me { color: var(--text); font-weight: 600; }
+.lb-tip b { font-weight: 500; font-variant-numeric: tabular-nums; }
+.lb-tip i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); }
 .legend span { display: inline-flex; align-items: center; gap: 5px; }
 .legend span.me { color: var(--text); font-weight: 600; }

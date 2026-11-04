@@ -24,10 +24,11 @@ primary_region = "iad"
   source = "ascend_data"
   destination = "/app/data"
 
+# 4 shared cores: backtests run one per core (each is a Python process), more wait in a short line
 [[vm]]
-  memory = "1gb"
+  memory = "4gb"
   cpu_kind = "shared"
-  cpus = 1
+  cpus = 4
 
-# overflow room if many players import pandas at once (scale up with: fly scale memory 2048)
+# overflow room if many players import pandas at once
 swap_size_mb = 1024

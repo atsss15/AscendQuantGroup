@@ -290,29 +290,59 @@
       table(['day', 'P&L', 'total', '', ''], mine, 'No competition days have run yet.', [1, 2]),
       latest ? [h('h3', {}, `${dayLabel({ day: latest.day, counts: latest.counts })} standings`), table(['#', 'player', 'P&L'], latestRows, '', [0, 2])] : '',
       h('h3', {}, 'Leaderboard'),
-      me.leaderboard.length ? [h('canvas', { id: 'lb-chart', height: 220 }), h('div', { id: 'lb-legend', class: 'legend' })] : '',
+      me.leaderboard.length ? [
+        h('div', { class: 'lb-wrap' }, h('canvas', { id: 'lb-chart', height: 220 }), h('div', { id: 'lb-tip', class: 'lb-tip', hidden: true })),
+        h('div', { id: 'lb-legend', class: 'legend' }),
+        h('p', { class: 'muted small' }, 'Through each day, P&L marks positions to the mid price; each day ends at its official P&L, marked to fair value.'),
+      ] : '',
       table(['#', 'player', 'total P&L'], board, me.practiceMode ? 'Nothing counts yet: it’s the practice week.' : 'The leaderboard fills in after the first day that counts.', [0, 2]),
     );
     if (me.leaderboard.length) drawLeaderboard(me);
   }
 
-  /** Each player's cumulative P&L over the days that count. */
+  /**
+   * Each player's cumulative P&L through the days that count, tick by tick (sampled by the server; marked to the
+   * mid price during a day, each day ending at its official P&L). Until those lines load, one point per day.
+   */
   function drawLeaderboard(me) {
+    const key = me.leaderboard.map((r) => `${r.userId}:${r.total}`).join();
+    if (store.lb?.key !== key) {
+      store.lb = { key, lines: null };
+      api('GET', '/leaderboard-lines').then((lines) => {
+        if (store.lb.key !== key) return;
+        store.lb.lines = lines;
+        if ($('#lb-chart')) plotLeaderboard(store.me, lines);
+      }).catch(() => {});
+    }
+    const days = [...new Set(me.leaderboard.flatMap((r) => Object.keys(r.byDay).map(Number)))].sort((a, b) => a - b);
+    const daily = {
+      days: days.map((day) => ({ day, points: 1 })),
+      players: me.leaderboard.map((r) => {
+        let cum = 0;
+        return { userId: r.userId, name: r.name, pts: days.map((d) => (cum += r.byDay[d] ?? 0)) };
+      }),
+    };
+    plotLeaderboard(me, store.lb.lines ?? daily);
+  }
+
+  function plotLeaderboard(me, { days, players }) {
     const canvas = $('#lb-chart');
     const dpr = devicePixelRatio;
     const w = (canvas.width = canvas.clientWidth * dpr);
     const hgt = (canvas.height = 220 * dpr);
     const ctx = canvas.getContext('2d');
-    const days = [...new Set(me.leaderboard.flatMap((r) => Object.keys(r.byDay).map(Number)))].sort((a, b) => a - b);
-    const lines = me.leaderboard.map((r, i) => {
-      let cum = 0;
-      return { name: r.name, color: COLORS[i % COLORS.length], me: r.name === me.name, pts: [0, ...days.map((d) => (cum += r.byDay[d] ?? 0))] };
-    });
+    // a player keeps their color whatever their rank
+    const ids = players.map((p) => p.userId).sort();
+    const rank = new Map(me.leaderboard.map((r, i) => [r.userId, i]));
+    const lines = players
+      .map((p) => ({ ...p, color: COLORS[ids.indexOf(p.userId) % COLORS.length], me: p.name === me.name }))
+      .sort((a, b) => (rank.get(a.userId) ?? 1e9) - (rank.get(b.userId) ?? 1e9));
+    const n = days.reduce((s, d) => s + d.points, 0);
     const all = lines.flatMap((l) => l.pts);
     const lo = Math.min(0, ...all);
     const hi = Math.max(0, ...all);
     const padL = 54 * dpr;
-    const x = (i) => padL + ((w - padL - 10 * dpr) * i) / Math.max(days.length, 1);
+    const x = (i) => padL + ((w - padL - 10 * dpr) * i) / Math.max(n, 1);
     const y = (v) => hgt - 22 * dpr - ((hgt - 34 * dpr) * (v - lo)) / (hi - lo || 1);
     ctx.font = `${10 * dpr}px system-ui`;
     ctx.fillStyle = '#8b949e';
@@ -325,20 +355,82 @@
     ctx.fillText(fmt(hi, 0), 2, y(hi) + 4 * dpr);
     ctx.fillText(fmt(lo, 0), 2, y(lo));
     if (lo < 0 && hi > 0) ctx.fillText('0', 2, y(0) + 4 * dpr);
-    ['start', ...days.map((d) => `Day ${d}`)].forEach((label, i) => {
-      if (days.length > 12 && i % Math.ceil(days.length / 12)) return;
-      ctx.fillText(label, x(i) - (i ? 14 * dpr : 0), hgt - 6 * dpr);
+    // days: a faint divider at each start, the label under its middle
+    let at = 0;
+    const labelEvery = Math.ceil(days.length / 12);
+    days.forEach((d, i) => {
+      if (i) {
+        ctx.strokeStyle = 'rgba(139,148,158,0.18)';
+        ctx.beginPath();
+        ctx.moveTo(x(at), 6 * dpr);
+        ctx.lineTo(x(at), hgt - 22 * dpr);
+        ctx.stroke();
+      }
+      const label = `Day ${d.day}`;
+      const mid = d.points > 1 ? x(at + d.points / 2) - ctx.measureText(label).width / 2 : x(at + 1) - 14 * dpr;
+      if (i % labelEvery === 0) ctx.fillText(label, Math.max(padL, Math.min(mid, w - ctx.measureText(label).width - 2)), hgt - 6 * dpr);
+      at += d.points;
     });
+    const dots = days.every((d) => d.points === 1);
     for (const l of [...lines].sort((a, b) => a.me - b.me)) {
       ctx.strokeStyle = l.color;
       ctx.fillStyle = l.color;
-      ctx.lineWidth = (l.me ? 3 : 1.5) * dpr;
+      ctx.lineWidth = (l.me ? 2.5 : 1.25) * dpr;
+      ctx.lineJoin = 'round';
       ctx.beginPath();
-      l.pts.forEach((v, i) => (i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v))));
+      ctx.moveTo(x(0), y(0));
+      l.pts.forEach((v, i) => ctx.lineTo(x(i + 1), y(v)));
       ctx.stroke();
-      l.pts.forEach((v, i) => i && ctx.fillRect(x(i) - 2 * dpr, y(v) - 2 * dpr, 4 * dpr, 4 * dpr));
+      if (dots) l.pts.forEach((v, i) => ctx.fillRect(x(i + 1) - 2 * dpr, y(v) - 2 * dpr, 4 * dpr, 4 * dpr));
     }
     fill($('#lb-legend'), lines.map((l) => h('span', { class: l.me ? 'me' : '' }, h('i', { style: `background:${l.color}` }), l.name)));
+
+    // hover: a crosshair, and everyone's P&L at that moment
+    const base = document.createElement('canvas');
+    base.width = w;
+    base.height = hgt;
+    base.getContext('2d').drawImage(canvas, 0, 0);
+    const tip = $('#lb-tip');
+    const where = (k) => {
+      // which day sample k (1-based) falls in, and the tick it stands for
+      let start = 0;
+      for (const d of days) {
+        if (k <= start + d.points) return { day: d.day, t: d.points > 1 ? (Math.round(((k - start) * me.ticks) / d.points) - 1) * (me.tickStep ?? 100) : null };
+        start += d.points;
+      }
+      return null;
+    };
+    canvas.onmousemove = (e) => {
+      const k = Math.min(n, Math.max(1, Math.round(((e.offsetX * dpr - padL) / (w - padL - 10 * dpr)) * n)));
+      ctx.drawImage(base, 0, 0);
+      ctx.strokeStyle = 'rgba(210,153,34,0.8)';
+      ctx.lineWidth = dpr;
+      ctx.beginPath();
+      ctx.moveTo(x(k), 0);
+      ctx.lineTo(x(k), hgt - 22 * dpr);
+      ctx.stroke();
+      for (const l of lines) {
+        ctx.fillStyle = l.color;
+        ctx.beginPath();
+        ctx.arc(x(k), y(l.pts[k - 1]), (l.me ? 4 : 3) * dpr, 0, 2 * Math.PI);
+        ctx.fill();
+      }
+      const at = where(k);
+      const ranked = [...lines].sort((a, b) => b.pts[k - 1] - a.pts[k - 1]);
+      const shown = ranked.slice(0, 10);
+      const mine = ranked.find((l) => l.me);
+      if (mine && !shown.includes(mine)) shown.push(mine);
+      fill(tip,
+        h('div', { class: 'muted' }, at ? `Day ${at.day}${at.t != null ? ` · t=${at.t.toLocaleString()}` : ''}` : ''),
+        shown.map((l) => h('div', { class: l.me ? 'me' : '' }, h('i', { style: `background:${l.color}` }), h('span', {}, `${ranked.indexOf(l) + 1}. ${l.name}`), h('b', { class: cls(l.pts[k - 1]) }, signed(l.pts[k - 1])))));
+      tip.hidden = false;
+      const left = e.offsetX + 14;
+      tip.style.left = `${left + tip.offsetWidth > canvas.clientWidth ? e.offsetX - tip.offsetWidth - 14 : left}px`;
+    };
+    canvas.onmouseleave = () => {
+      ctx.drawImage(base, 0, 0);
+      tip.hidden = true;
+    };
   }
 
   // ------------------------------------------------------------------ market data
