@@ -285,7 +285,7 @@
     const board = me.leaderboard.map((r, i) => h('tr', { class: r.name === me.name ? 'me' : '' },
       h('td', { class: 'num muted' }, i + 1), h('td', {}, r.name), h('td', { class: `num ${cls(r.total)}` }, signed(r.total))));
     const without = (me.without ?? []).map((w) => [
-      h('h3', {}, `Without ${w.name} · ${daysText(w.days)}`),
+      h('h3', {}, `${daysText(w.days)} without ${listText(w.players.map((p) => p.name))}`),
       table(['#', 'player', 'P&L', 'change'], w.board.map((r, i) => h('tr', { class: r.name === me.name ? 'me' : '' },
         h('td', { class: 'num muted' }, i + 1), h('td', {}, r.name), h('td', { class: `num ${cls(r.total)}` }, signed(r.total)),
         h('td', { class: `num ${cls(r.total - r.actual)}` }, signed(r.total - r.actual)))), '', [0, 2, 3]),
@@ -299,8 +299,8 @@
         h('p', { class: 'muted small' }, 'Through each day, P&L marks positions to the mid price; each day ends at its official P&L, marked to fair value.'),
       ] : '',
       table(['#', 'player', 'total P&L'], board, me.practiceMode ? 'Nothing counts yet: it’s the practice week.' : 'The leaderboard fills in after the first day that counts.', [0, 2]),
-      without.length ? folded('without', 'Leaderboard without one player (unofficial, for information)',
-        h('p', { class: 'muted small' }, 'Not part of the competition: these don’t count anywhere. The same days run again with one player left out: same seed and starting market, everyone else’s code from that day, and every order keeps its place in the queue. The bots react to who is trading, so prices can differ. Only the P&L is kept. “Change” is what leaving that player out did to each player’s P&L on those days.'),
+      without.length ? folded('without', `Leaderboard without ${listText(me.without[0].players.map((p) => p.name))} (unofficial, for information)`,
+        h('p', { class: 'muted small' }, 'Not part of the competition: this doesn’t count anywhere. The same days run again with these players left out: same seed and starting market, everyone else’s code from that day, and every order keeps its place in the queue. The bots react to who is trading, so prices can differ. Only the P&L is kept. “Change” is what leaving them out did to each player’s P&L on those days.'),
         without) : '',
       latest ? [h('h3', {}, `${dayLabel({ day: latest.day, counts: latest.counts })} standings`), table(['#', 'player', 'P&L'], latestRows, '', [0, 2])] : '',
       folded('mine', 'Your days', table(['day', 'P&L', 'total', '', ''], mine, 'No competition days have run yet.', [1, 2])),
@@ -310,11 +310,13 @@
 
   // Monday first; the numbers are JavaScript's (0 = Sunday)
   const WEEK = [[1, 'Mon'], [2, 'Tue'], [3, 'Wed'], [4, 'Thu'], [5, 'Fri'], [6, 'Sat'], [0, 'Sun']];
+  // "Kevin", "Kevin and Susie", "Attis, Kevin and Susie"
+  const listText = (names) => (names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0] ?? '');
   // "every day", "every Wed, Thu and Fri"
   const weekdaysText = (days) => {
     if (!days) return 'every day';
     const names = WEEK.filter(([d]) => days.includes(d)).map(([, n]) => n);
-    return `every ${names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0]}`;
+    return `every ${listText(names)}`;
   };
 
   // "Day 2", "Days 1–3", "Days 1, 3"
@@ -766,7 +768,7 @@
         } }),
         'Practice week: new days run normally but don’t count toward the leaderboard'),
       h('div', { class: 'toolbar small' },
-        h('span', { class: 'muted' }, 'Also re-run each counted day without (one at a time; P&L only):'),
+        h('span', { class: 'muted' }, 'Also re-run each counted day without all of these together (unofficial; P&L only):'),
         wo.players.map((p, i) => h('label', { class: 'toolbar' }, woBoxes[i], p.name)),
         h('span', { id: 'wo-status' }, withoutStatus(wo))),
       h('div', { class: 'toolbar' },
@@ -819,7 +821,7 @@
     const r = wo.running;
     const more = r && wo.waiting > 1 ? ` (${wo.waiting - 1} more waiting)` : '';
     return [
-      r ? `Day ${r.day} ${r.name == null ? 'with everyone (first, as the comparison)' : `without ${r.name}`}… ${Math.round(r.progress * 100)}%${more}`
+      r ? `Day ${r.day} ${r.names ? `without ${listText(r.names)}` : 'with everyone (first, as the comparison)'}… ${Math.round(r.progress * 100)}%${more}`
         : wo.waiting ? `${wo.waiting} waiting` : '',
       wo.error ? h('span', { class: 'error' }, ` ${wo.error}`) : '',
     ];

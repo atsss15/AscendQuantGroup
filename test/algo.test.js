@@ -170,7 +170,7 @@ test('practice week: days run and show standings but stay out of the leaderboard
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('days re-run without one player: exact replay of the queue, P&L only, no files, paused by a day run', { timeout: 120000 }, async () => {
+test('days re-run without the chosen players: exact replay of the queue, P&L only, no files, paused by a day run', { timeout: 120000 }, async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'algo-without-'));
   const svc = new AlgoService({ config: { ...small, ticks: 400 }, dir });
   svc.setPracticeMode(false);
@@ -178,6 +178,7 @@ test('days re-run without one player: exact replay of the queue, P&L only, no fi
   svc.submit('u1', competition.template);
   svc.submit('u2', competition.template); // same code as u1: their places in the queue come down to CPU time
   svc.submit('u3', noop);
+  svc.submit('u4', competition.template);
   await svc.runDay();
   const files = () => fs.readdirSync(svc.dayDir(1), { recursive: true }).sort();
   const before = files();
@@ -188,11 +189,12 @@ test('days re-run without one player: exact replay of the queue, P&L only, no fi
   svc.setWithoutPlayers(['u3']);
   await svc.fillWithout();
   const d1 = svc.getDay(1);
-  assert.deepEqual(d1.without.u3.results, { u1: { pnl: d1.results.u1.pnl }, u2: { pnl: d1.results.u2.pnl } },
+  const pnl = (results, ids) => Object.fromEntries(ids.map((id) => [id, { pnl: results[id].pnl }]));
+  assert.deepEqual(d1.without, { players: ['u3'], ranAt: d1.without.ranAt, results: pnl(d1.results, ['u1', 'u2', 'u4']) },
     'leaving out a player who never trades changes nothing: the re-run replays the real queue');
   assert.deepEqual(files(), before, 're-runs write no data files, trades or logs');
 
-  // a day run pauses a re-run in progress; it resumes once the day is done
+  // all the chosen players are left out together; a day run pauses a re-run in progress, which resumes after it
   svc.setWithoutPlayers(['u3', 'u1']);
   while (!(svc.extra?.progress > 0)) await new Promise((r) => setTimeout(r, 5));
   delete svc.state.submissions.u3; // (u3 sits Day 2 out)
@@ -208,30 +210,38 @@ test('days re-run without one player: exact replay of the queue, P&L only, no fi
   assert.deepEqual(svc.withoutQueue(), []);
   assert.equal(svc.withoutError, null);
   const d2 = svc.getDay(2);
-  assert.deepEqual(Object.keys(d1.without.u1.results).sort(), ['u2', 'u3']);
-  assert.ok(Object.values(d1.without.u1.results).every((r) => Object.keys(r).join() === 'pnl'), 'only the P&L is kept');
-  assert.deepEqual(d2.without.u3.results, { u1: { pnl: d2.results.u1.pnl }, u2: { pnl: d2.results.u2.pnl } }, 'sat out: the day as it was');
+  assert.deepEqual(d1.without.players, ['u1', 'u3']);
+  assert.deepEqual(Object.keys(d1.without.results).sort(), ['u2', 'u4']);
+  assert.deepEqual(Object.keys(d2.without.results).sort(), ['u2', 'u4'], 'Day 2 without u1 (u3 sat it out)');
+  assert.ok(Object.values(d1.without.results).every((r) => Object.keys(r).join() === 'pnl'), 'only the P&L is kept');
 
   const boards = svc.withoutBoards((id) => id.toUpperCase());
-  assert.deepEqual(boards.map((w) => [w.name, w.days]), [['U3', [1, 2]], ['U1', [1, 2]]]);
-  const u2 = boards[1].board.find((r) => r.userId === 'u2');
+  assert.equal(boards.length, 1, 'one board, without them all');
+  assert.deepEqual(boards[0].players.map((p) => p.name), ['U1', 'U3']);
+  assert.deepEqual(boards[0].days, [1, 2]);
+  assert.deepEqual(boards[0].board.map((r) => r.userId).sort(), ['u2', 'u4']);
+  const u2 = boards[0].board.find((r) => r.userId === 'u2');
   assert.equal(u2.actual, Math.round((d1.results.u2.pnl + d2.results.u2.pnl) * 100) / 100);
-  assert.equal(u2.total, Math.round((d1.without.u1.results.u2.pnl + d2.without.u1.results.u2.pnl) * 100) / 100);
-  assert.ok(!boards[1].board.some((r) => r.userId === 'u1'), 'the player left out is not on their board');
+  assert.equal(u2.total, Math.round((d1.without.results.u2.pnl + d2.without.results.u2.pnl) * 100) / 100);
   assert.deepEqual(svc.playerView('u2', (id) => id.toUpperCase()).without, boards);
 
-  // a day from before calls were recorded first gets a re-run with everyone, and is compared with that
-  fs.rmSync(path.join(svc.dayDir(2), 'calls.json'));
-  delete d2.without;
-  assert.deepEqual(svc.withoutQueue().map((j) => [j.d.day, j.userId]), [[2, null], [2, 'u3'], [2, 'u1']]);
+  // none of them played that day: the day as it was
+  svc.setWithoutPlayers(['u3']);
   await svc.fillWithout();
-  assert.ok(d2.baseline && fs.existsSync(path.join(svc.dayDir(2), 'calls.json')));
-  assert.deepEqual(d2.without.u3.results, d2.baseline.results, 'the replay of the re-run with everyone is exact too');
-  const again = svc.withoutBoards((id) => id)[1].board.find((r) => r.userId === 'u2');
-  assert.equal(again.actual, Math.round((d1.results.u2.pnl + d2.baseline.results.u2.pnl) * 100) / 100);
+  assert.deepEqual(d2.without.results, pnl(d2.results, ['u1', 'u2', 'u4']));
 
-  svc.setWithoutPlayers(['u1']);
-  assert.deepEqual(svc.withoutBoards((id) => id).map((w) => w.userId), ['u1'], 'only the chosen players show');
+  // a day from before calls were recorded first gets a re-run with everyone, and is compared with that
+  fs.rmSync(path.join(svc.dayDir(1), 'calls.json'));
+  delete d1.without;
+  assert.deepEqual(svc.withoutQueue().map((j) => [j.d.day, j.out]), [[1, null], [1, ['u3']]]);
+  await svc.fillWithout();
+  assert.ok(d1.baseline && fs.existsSync(path.join(svc.dayDir(1), 'calls.json')));
+  assert.deepEqual(d1.without.results, pnl(d1.baseline.results, ['u1', 'u2', 'u4']), 'the replay of the re-run with everyone is exact too');
+  const again = svc.withoutBoards((id) => id)[0].board.find((r) => r.userId === 'u2');
+  assert.equal(again.actual, Math.round((d1.baseline.results.u2.pnl + d2.results.u2.pnl) * 100) / 100);
+
+  svc.setWithoutPlayers([]);
+  assert.deepEqual(svc.withoutBoards((id) => id), [], 'nobody chosen: no board');
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

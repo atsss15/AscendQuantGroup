@@ -38,13 +38,14 @@ export class AlgoService {
     this.backtests = 0;
     this.waiting = [];
     this.curves = new Map(); // day → each player's P&L through the day (see dayCurves)
-    this.extra = null; // { day, userId, progress } while a day re-runs without one player (see runWithout)
+    this.extra = null; // { day, out, progress, agents } while a day re-runs without the chosen players (see runWithout)
     this.filling = null; // the background loop working through the missing re-runs
-    this.withoutFailed = new Set(); // re-runs that failed (`${day}:${ranAt}:${userId}`); retried when the admin saves again
+    this.withoutFailed = new Set(); // re-runs that failed (`${day}:${ranAt}:${who}`); retried when the admin saves again
     this.withoutError = null;
     this.state = freshState();
     const file = path.join(dir, 'state.json');
     if (fs.existsSync(file)) Object.assign(this.state, JSON.parse(fs.readFileSync(file, 'utf8')));
+    this.state.withoutPlayers?.sort(); // compared as a set, in the order setWithoutPlayers keeps
   }
 
   save() {
@@ -182,32 +183,34 @@ export class AlgoService {
     }
   }
 
-  // ---------------------------------------------------------------- days without one player
+  // ---------------------------------------------------------------- days without some players
 
   /**
-   * Re-run a competition day with one player left out: same seed and start, everyone else's code from that day.
-   * Each call keeps its place in the queue from the real day (its recorded CPU time, and whether it ran over the time
-   * limit), so the only change is the missing player. Only each player's P&L is kept: no data files, trades or logs,
+   * Re-run a competition day with the chosen players all left out: same seed and start, everyone else's code from that
+   * day. Each call keeps its place in the queue from the real day (its recorded CPU time, and whether it ran over the
+   * time limit), so the only change is who's missing. Only each player's P&L is kept: no data files, trades or logs,
    * so it shows nothing but the standings.
-   * userId null: a re-run with everyone, for a day that ran before calls were recorded. It records the calls the
+   * out null: a re-run with everyone, for a day that ran before calls were recorded. It records the calls the
    * re-runs then replay, and its P&L stands in for the real day's when they're compared.
    */
-  async runWithout(d, userId) {
+  async runWithout(d, out) {
     const ranAt = d.ranAt;
     const file = path.join(this.dayDir(d.day), 'calls.json');
+    const everyone = Object.keys(d.results);
+    const players = out ? everyone.filter((id) => !out.includes(id)) : everyone;
     let results;
-    if (userId != null && !(userId in d.results)) {
-      results = pnlOnly(d.baseline?.results ?? d.results); // sat that day out: nothing changes
+    if (players.length === everyone.length && out) {
+      results = pnlOnly((d.baseline ?? d).results); // none of them played that day: nothing changes
     } else {
-      const replay = userId != null;
+      const replay = out != null;
       const calls = replay ? JSON.parse(fs.readFileSync(file, 'utf8')) : { cpu: {}, slow: {} };
       const step = this.config.tickStep ?? 100;
       const pause = () => {
         if (this.running || this.preparing) throw new AlgoError('Paused for a day run');
       };
-      this.extra = { day: d.day, userId, progress: 0, agents: [] };
+      this.extra = { day: d.day, out, progress: 0, agents: [] };
       try {
-        for (const id of Object.keys(d.results).filter((x) => x !== userId)) {
+        for (const id of players) {
           pause();
           const code = fs.readFileSync(path.join(this.dayDir(d.day), 'code', `${id}.py`), 'utf8');
           // a replayed call is never dropped for being slow here (the recording says which ones were)
@@ -236,26 +239,25 @@ export class AlgoService {
       }
     }
     if (!this.state.days.includes(d) || d.ranAt !== ranAt) return; // the day was deleted or re-run meanwhile
-    if (userId == null) d.baseline = { ranAt: Date.now(), results };
-    else d.without = { ...d.without, [userId]: { ranAt: Date.now(), results } };
+    if (out == null) d.baseline = { ranAt: Date.now(), results };
+    else d.without = { players: out, ranAt: Date.now(), results };
     this.save();
   }
 
   /**
-   * Counted days still missing a re-run without one of the chosen players, oldest first. A day that ran before calls
-   * were recorded first gets a re-run with everyone (userId null).
+   * Counted days still missing a re-run without the chosen players, oldest first. A day that ran before calls were
+   * recorded first gets a re-run with everyone (out null).
    */
   withoutQueue() {
-    const ids = this.state.withoutPlayers ?? [];
-    if (!ids.length) return [];
-    const failed = (d, id) => this.withoutFailed.has(`${d.day}:${d.ranAt}:${id}`);
+    const out = this.state.withoutPlayers ?? [];
+    if (!out.length) return [];
+    const failed = (d, what) => this.withoutFailed.has(`${d.day}:${d.ranAt}:${what}`);
     return this.state.days
       .filter((d) => !d.practice && d.counts !== false)
       .flatMap((d) => {
-        const jobs = ids.filter((id) => !d.without?.[id] && !failed(d, id)).map((userId) => ({ d, userId }));
-        const recorded = d.baseline || fs.existsSync(path.join(this.dayDir(d.day), 'calls.json'));
-        if (!jobs.length || recorded) return jobs;
-        return failed(d, null) ? [] : [{ d, userId: null }, ...jobs];
+        if (d.without?.players?.join() === out.join() || failed(d, out.join())) return [];
+        if (d.baseline || fs.existsSync(path.join(this.dayDir(d.day), 'calls.json'))) return [{ d, out }];
+        return failed(d, 'everyone') ? [] : [{ d, out: null }, { d, out }];
       });
   }
 
@@ -267,25 +269,25 @@ export class AlgoService {
 
   async drainWithout() {
     for (let next; !this.running && !this.preparing && (next = this.withoutQueue()[0]); ) {
-      const { d, userId } = next;
+      const { d, out } = next;
       const ranAt = d.ranAt;
       try {
-        await this.runWithout(d, userId);
+        await this.runWithout(d, out);
       } catch (err) {
         if (this.running || this.preparing) break; // paused; the day run calls fillWithout when it ends
         if (!this.state.days.includes(d) || d.ranAt !== ranAt) continue; // the day went away meanwhile
-        this.withoutFailed.add(`${d.day}:${d.ranAt}:${userId}`);
-        this.withoutError = `Day ${d.day} ${userId == null ? 'with everyone' : `without ${this.names(userId)}`}: ${err.message}`;
+        this.withoutFailed.add(`${d.day}:${d.ranAt}:${out ? out.join() : 'everyone'}`);
+        this.withoutError = `Day ${d.day} ${out ? `without ${out.map(this.names).join(', ')}` : 'with everyone'}: ${err.message}`;
         if (!(err instanceof AlgoError)) console.error('[algo without]', err);
       }
     }
   }
 
-  /** Choose the players to leave out, one at a time, in re-runs of every counted day (and each new one). */
+  /** Choose the players to leave out, all together, in re-runs of every counted day (and each new one). */
   setWithoutPlayers(players) {
     const known = new Set([...Object.keys(this.state.submissions), ...this.state.days.flatMap((d) => Object.keys(d.results))]);
     if (!Array.isArray(players) || players.length > 10 || !players.every((id) => known.has(id))) throw new AlgoError('Pick up to 10 players');
-    this.state.withoutPlayers = [...new Set(players)];
+    this.state.withoutPlayers = [...new Set(players)].sort();
     this.withoutFailed.clear();
     this.withoutError = null;
     this.save();
@@ -617,23 +619,20 @@ export class AlgoService {
   }
 
   /**
-   * For each player chosen to leave out: the leaderboard over the counted days re-run without them, beside what each
-   * player made on those same days with them in (the real day, or for days before calls were recorded, its re-run
-   * with everyone).
+   * The leaderboard over the counted days re-run without the chosen players, beside what each other player made on
+   * those days with them in (the real day, or for days before calls were recorded, its re-run with everyone).
+   * An empty list until a day has been re-run.
    */
   withoutBoards(names) {
-    const comp = this.state.days.filter((d) => !d.practice && d.counts !== false);
-    return (this.state.withoutPlayers ?? [])
-      .map((out) => {
-        const days = comp.filter((d) => d.without?.[out]);
-        const ids = [...new Set(days.flatMap((d) => Object.keys(d.results)))].filter((id) => id !== out);
-        const sum = (f) => round2(days.reduce((s, d) => s + (f(d) ?? 0), 0));
-        const board = ids
-          .map((id) => ({ userId: id, name: names(id), total: sum((d) => d.without[out].results[id]?.pnl), actual: sum((d) => (d.baseline ?? d).results[id]?.pnl) }))
-          .sort((a, b) => b.total - a.total);
-        return { userId: out, name: names(out), days: days.map((d) => d.day), board };
-      })
-      .filter((w) => w.days.length);
+    const out = this.state.withoutPlayers ?? [];
+    const days = this.state.days.filter((d) => !d.practice && d.counts !== false && out.length && d.without?.players?.join() === out.join());
+    if (!days.length) return [];
+    const ids = [...new Set(days.flatMap((d) => Object.keys(d.results)))].filter((id) => !out.includes(id));
+    const sum = (f) => round2(days.reduce((s, d) => s + (f(d) ?? 0), 0));
+    const board = ids
+      .map((id) => ({ userId: id, name: names(id), total: sum((d) => d.without.results[id]?.pnl), actual: sum((d) => (d.baseline ?? d).results[id]?.pnl) }))
+      .sort((a, b) => b.total - a.total);
+    return [{ players: out.map((id) => ({ userId: id, name: names(id) })), days: days.map((d) => d.day), board }];
   }
 
   /** Standings for the most recent competition day, counted or not. */
@@ -708,7 +707,7 @@ export class AlgoService {
         players: [...new Set([...Object.keys(this.state.submissions), ...this.state.days.flatMap((d) => Object.keys(d.results))])]
           .map((id) => ({ userId: id, name: names(id), on: (this.state.withoutPlayers ?? []).includes(id) }))
           .sort((a, b) => a.name.localeCompare(b.name)),
-        running: this.extra && { day: this.extra.day, name: this.extra.userId == null ? null : names(this.extra.userId), progress: this.extra.progress },
+        running: this.extra && { day: this.extra.day, names: this.extra.out && this.extra.out.map(names), progress: this.extra.progress },
         waiting: this.withoutQueue().length,
         error: this.withoutError,
       },
@@ -724,7 +723,7 @@ function freshState() {
     nextDay: 1,
     deadline: '',
     practiceMode: true, // practice week: days run normally but don't count toward the cumulative leaderboard
-    withoutPlayers: [], // each counted day is also re-run without each of these players (results only; see runWithout)
+    withoutPlayers: [], // each counted day is also re-run without all of these players (results only; see runWithout)
     round: 0, // the setup/practice round; each "Start new round" adds one
     schedule: { enabled: false, time: '12:00', timeZone: 'America/New_York', startDate: null, lastRun: null },
   };
