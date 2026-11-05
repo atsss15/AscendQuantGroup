@@ -170,6 +170,71 @@ test('practice week: days run and show standings but stay out of the leaderboard
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('days re-run without one player: exact replay of the queue, P&L only, no files, paused by a day run', { timeout: 120000 }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'algo-without-'));
+  const svc = new AlgoService({ config: { ...small, ticks: 400 }, dir });
+  svc.setPracticeMode(false);
+  const noop = 'class Trader:\n    def run(self, state):\n        return {}, 0, ""\n';
+  svc.submit('u1', competition.template);
+  svc.submit('u2', competition.template); // same code as u1: their places in the queue come down to CPU time
+  svc.submit('u3', noop);
+  await svc.runDay();
+  const files = () => fs.readdirSync(svc.dayDir(1), { recursive: true }).sort();
+  const before = files();
+  assert.ok(before.includes('calls.json'), 'the real day records each call');
+  assert.throws(() => svc.dataFile(1, 'calls'), /Unknown file/, 'and never serves it');
+
+  assert.throws(() => svc.setWithoutPlayers(['nobody']), /up to 10 players/);
+  svc.setWithoutPlayers(['u3']);
+  await svc.fillWithout();
+  const d1 = svc.getDay(1);
+  assert.deepEqual(d1.without.u3.results, { u1: { pnl: d1.results.u1.pnl }, u2: { pnl: d1.results.u2.pnl } },
+    'leaving out a player who never trades changes nothing: the re-run replays the real queue');
+  assert.deepEqual(files(), before, 're-runs write no data files, trades or logs');
+
+  // a day run pauses a re-run in progress; it resumes once the day is done
+  svc.setWithoutPlayers(['u3', 'u1']);
+  while (!(svc.extra?.progress > 0)) await new Promise((r) => setTimeout(r, 5));
+  delete svc.state.submissions.u3; // (u3 sits Day 2 out)
+  let paused = false;
+  const day2 = svc.runDay();
+  while (svc.running) {
+    if (!svc.extra) paused = true;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  await day2;
+  assert.ok(paused, 'the re-run stopped while the day ran');
+  await svc.fillWithout();
+  assert.deepEqual(svc.withoutQueue(), []);
+  assert.equal(svc.withoutError, null);
+  const d2 = svc.getDay(2);
+  assert.deepEqual(Object.keys(d1.without.u1.results).sort(), ['u2', 'u3']);
+  assert.ok(Object.values(d1.without.u1.results).every((r) => Object.keys(r).join() === 'pnl'), 'only the P&L is kept');
+  assert.deepEqual(d2.without.u3.results, { u1: { pnl: d2.results.u1.pnl }, u2: { pnl: d2.results.u2.pnl } }, 'sat out: the day as it was');
+
+  const boards = svc.withoutBoards((id) => id.toUpperCase());
+  assert.deepEqual(boards.map((w) => [w.name, w.days]), [['U3', [1, 2]], ['U1', [1, 2]]]);
+  const u2 = boards[1].board.find((r) => r.userId === 'u2');
+  assert.equal(u2.actual, Math.round((d1.results.u2.pnl + d2.results.u2.pnl) * 100) / 100);
+  assert.equal(u2.total, Math.round((d1.without.u1.results.u2.pnl + d2.without.u1.results.u2.pnl) * 100) / 100);
+  assert.ok(!boards[1].board.some((r) => r.userId === 'u1'), 'the player left out is not on their board');
+  assert.deepEqual(svc.playerView('u2', (id) => id.toUpperCase()).without, boards);
+
+  // a day from before calls were recorded first gets a re-run with everyone, and is compared with that
+  fs.rmSync(path.join(svc.dayDir(2), 'calls.json'));
+  delete d2.without;
+  assert.deepEqual(svc.withoutQueue().map((j) => [j.d.day, j.userId]), [[2, null], [2, 'u3'], [2, 'u1']]);
+  await svc.fillWithout();
+  assert.ok(d2.baseline && fs.existsSync(path.join(svc.dayDir(2), 'calls.json')));
+  assert.deepEqual(d2.without.u3.results, d2.baseline.results, 'the replay of the re-run with everyone is exact too');
+  const again = svc.withoutBoards((id) => id)[1].board.find((r) => r.userId === 'u2');
+  assert.equal(again.actual, Math.round((d1.results.u2.pnl + d2.baseline.results.u2.pnl) * 100) / 100);
+
+  svc.setWithoutPlayers(['u1']);
+  assert.deepEqual(svc.withoutBoards((id) => id).map((w) => w.userId), ['u1'], 'only the chosen players show');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('own fills name the counterparty (player name or bot id); market trades stay anonymous', async () => {
   // both quote at 1000, inside the bots' spread around ~1000: they meet in the auction; bots trade with what's left
   const buyer = `
@@ -395,6 +460,10 @@ test('end to end over HTTP', { timeout: 30000 }, async (t) => {
   assert.equal((await call('POST', '/backtest', jay.token, { code: 'class Trader: pass', day: 7 })).status, 400);
   assert.equal((await call('GET', '/days/1/observations.csv', jay.token)).status, 404, 'this design publishes no features');
   assert.equal((await call('POST', '/admin/schedule', jay.token, { enabled: true })).status, 403);
+  assert.equal((await call('POST', '/admin/without', jay.token, { players: [] })).status, 403);
+  assert.equal((await call('POST', '/admin/without', admin, { players: ['nobody'] })).status, 400);
+  assert.deepEqual((await call('POST', '/admin/without', admin, { players: [] })).body, { players: [] });
+  assert.deepEqual((await call('GET', '/me', jay.token)).body.without, []);
   const sched = await call('POST', '/admin/schedule', admin, { enabled: true, time: '12:00', startDate: '2030-01-02' });
   assert.equal(new Date(sched.body.nextRunAt).toISOString(), '2030-01-02T17:00:00.000Z');
   assert.equal((await call('GET', '/me', jay.token)).body.schedule.nextRunAt, sched.body.nextRunAt, 'players see when the next day runs');

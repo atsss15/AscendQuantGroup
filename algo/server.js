@@ -89,6 +89,7 @@ export function attachAlgo(server, { config, dir = path.resolve('data', 'algo'),
   admin.get('/hosting', wrap(() => hostingInfo()));
   admin.post('/deadline', wrap((req) => service.setDeadline(req.body?.text)));
   admin.post('/practice-mode', wrap((req) => service.setPracticeMode(req.body?.on)));
+  admin.post('/without', wrap((req) => service.setWithoutPlayers(req.body?.players)));
   admin.post('/days/:day/counts', wrap((req) => service.setDayCounts(req.params.day, req.body?.counts)));
   admin.delete('/days/:day', wrap((req) => service.deleteDay(req.params.day)));
   admin.get('/days/:day/code/:userId', (req, res) => sendFile(res, () => service.dataFile(req.params.day, 'code', req.params.userId), `day_${req.params.day}_${names(req.params.userId)}.py`));

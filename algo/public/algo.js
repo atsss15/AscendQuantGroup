@@ -82,7 +82,7 @@
 
   // ------------------------------------------------------------------ state
 
-  const store = { me: null, admin: null, editor: null, dirty: false, saving: null, md: { day: null, product: null, feature: null, data: new Map(), obs: new Map() } };
+  const store = { me: null, admin: null, editor: null, dirty: false, saving: null, open: new Set(), md:{ day: null, product: null, feature: null, data: new Map(), obs: new Map() } };
   const FEATURES = '__features'; // the market-data tab showing the published features instead of a product
 
   // ------------------------------------------------------------------ sign in
@@ -284,11 +284,14 @@
       h('td', { class: 'num muted' }, i + 1), h('td', {}, r.name), h('td', { class: `num ${cls(r.pnl)}` }, signed(r.pnl))));
     const board = me.leaderboard.map((r, i) => h('tr', { class: r.name === me.name ? 'me' : '' },
       h('td', { class: 'num muted' }, i + 1), h('td', {}, r.name), h('td', { class: `num ${cls(r.total)}` }, signed(r.total))));
+    const without = (me.without ?? []).map((w) => [
+      h('h3', {}, `Without ${w.name} · ${daysText(w.days)}`),
+      table(['#', 'player', 'P&L', 'change'], w.board.map((r, i) => h('tr', { class: r.name === me.name ? 'me' : '' },
+        h('td', { class: 'num muted' }, i + 1), h('td', {}, r.name), h('td', { class: `num ${cls(r.total)}` }, signed(r.total)),
+        h('td', { class: `num ${cls(r.total - r.actual)}` }, signed(r.total - r.actual)))), '', [0, 2, 3]),
+    ]);
     fill($('#results'),
       me.practiceMode ? h('p', { class: 'small', style: 'color:var(--amber)' }, 'Practice week: days run as normal, but results don’t count toward the leaderboard yet.') : '',
-      h('h3', {}, 'Your days'),
-      table(['day', 'P&L', 'total', '', ''], mine, 'No competition days have run yet.', [1, 2]),
-      latest ? [h('h3', {}, `${dayLabel({ day: latest.day, counts: latest.counts })} standings`), table(['#', 'player', 'P&L'], latestRows, '', [0, 2])] : '',
       h('h3', {}, 'Leaderboard'),
       me.leaderboard.length ? [
         h('div', { class: 'lb-wrap' }, h('canvas', { id: 'lb-chart', height: 220 }), h('div', { id: 'lb-tip', class: 'lb-tip', hidden: true })),
@@ -296,8 +299,23 @@
         h('p', { class: 'muted small' }, 'Through each day, P&L marks positions to the mid price; each day ends at its official P&L, marked to fair value.'),
       ] : '',
       table(['#', 'player', 'total P&L'], board, me.practiceMode ? 'Nothing counts yet: it’s the practice week.' : 'The leaderboard fills in after the first day that counts.', [0, 2]),
+      without.length ? folded('without', 'Leaderboard without one player',
+        h('p', { class: 'muted small' }, 'The same days run again with one player left out: same seed and starting market, everyone else’s code from that day, and every order keeps its place in the queue. The bots react to who is trading, so prices can differ. Only the P&L is kept. “Change” is what leaving that player out did to each player’s P&L on those days.'),
+        without) : '',
+      latest ? [h('h3', {}, `${dayLabel({ day: latest.day, counts: latest.counts })} standings`), table(['#', 'player', 'P&L'], latestRows, '', [0, 2])] : '',
+      folded('mine', 'Your days', table(['day', 'P&L', 'total', '', ''], mine, 'No competition days have run yet.', [1, 2])),
     );
     if (me.leaderboard.length) drawLeaderboard(me);
+  }
+
+  // "Day 2", "Days 1–3", "Days 1, 3"
+  const daysText = (days) => (days.length === 1 ? `Day ${days[0]}`
+    : days.every((d, i) => !i || d === days[i - 1] + 1) ? `Days ${days[0]}–${days.at(-1)}` : `Days ${days.join(', ')}`);
+
+  /** A folded section that stays open or shut across the page's refreshes. */
+  function folded(key, title, ...body) {
+    return h('details', { class: 'fold', open: store.open.has(key), ontoggle: (e) => (e.target.open ? store.open.add(key) : store.open.delete(key)) },
+      h('summary', {}, title), body);
   }
 
   /**
@@ -671,6 +689,21 @@
       }
     };
 
+    const wo = a.without;
+    // saved on every change, so a refresh can't undo a tick that wasn't saved yet
+    const saveWithout = async () => {
+      try {
+        const r = await api('POST', '/admin/without', { players: woBoxes.filter((b) => b.checked).map((b) => b.value) });
+        toast(r.players.length ? 'Saved: any missing re-runs start in the background' : 'No re-runs without players');
+        await load();
+        if (store.admin?.without?.waiting) pollWithout();
+      } catch (err) {
+        toast(err.message, 'error');
+        load();
+      }
+    };
+    const woBoxes = wo.players.map((p) => h('input', { type: 'checkbox', checked: p.on, value: p.userId, onchange: saveWithout }));
+
     const resetEditors = async () => {
       if (!confirm('Replace the code in everyone’s editor with the current starting template?\n\nTheir current code is saved to an archive file on the server first. Submissions are not affected.')) return;
       try {
@@ -720,6 +753,10 @@
           load();
         } }),
         'Practice week: new days run normally but don’t count toward the leaderboard'),
+      h('div', { class: 'toolbar small' },
+        h('span', { class: 'muted' }, 'Also re-run each counted day without (one at a time; P&L only):'),
+        wo.players.map((p, i) => h('label', { class: 'toolbar' }, woBoxes[i], p.name)),
+        h('span', { id: 'wo-status' }, withoutStatus(wo))),
       h('div', { class: 'toolbar' },
         h('span', { class: 'muted small' }, 'Deadline shown to players:'), deadline,
         h('button', { type: 'button', class: 'small', onclick: async () => {
@@ -729,8 +766,8 @@
         } }, 'Save')),
       h('div', { id: 'hosting', class: 'toolbar small muted' }, 'Hosting cost: loading…'),
       h('div', { class: 'toolbar small' }, h('button', { type: 'button', class: 'small', onclick: resetEditors }, 'Reset everyone’s editor to the template…')),
-      h('details', {}, h('summary', {}, `Submissions (${a.submissions.length})`), table(['player', 'submitted', 'lines', ''], subs, 'Nobody has submitted yet.', [2])),
-      h('details', {}, h('summary', {}, `Days (${a.days.length})`), days.length ? days : h('p', { class: 'muted small' }, 'No days yet. Generate data days so players have data to start with.')),
+      folded('admin-subs', `Submissions (${a.submissions.length})`, table(['player', 'submitted', 'lines', ''], subs, 'Nobody has submitted yet.', [2])),
+      folded('admin-days', `Days (${a.days.length})`, days.length ? days : h('p', { class: 'muted small' }, 'No days yet. Generate data days so players have data to start with.')),
     );
     renderHosting();
   }
@@ -761,7 +798,41 @@
     pollTimer = setTimeout(async () => {
       await load();
       if (store.admin?.running || store.admin?.preparing) pollAdmin();
+      else if (store.admin?.without?.waiting) pollWithout();
     }, 1000);
+  }
+
+  // "Day 2 without Kevin… 40% (3 more waiting)"
+  function withoutStatus(wo) {
+    const r = wo.running;
+    const more = r && wo.waiting > 1 ? ` (${wo.waiting - 1} more waiting)` : '';
+    return [
+      r ? `Day ${r.day} ${r.name == null ? 'with everyone (first, as the comparison)' : `without ${r.name}`}… ${Math.round(r.progress * 100)}%${more}`
+        : wo.waiting ? `${wo.waiting} waiting` : '',
+      wo.error ? h('span', { class: 'error' }, ` ${wo.error}`) : '',
+    ];
+  }
+
+  // while re-runs go (about a minute each), refresh only their status line, then everything once they're done
+  let woTimer = null;
+  function pollWithout() {
+    clearTimeout(woTimer);
+    woTimer = setTimeout(async () => {
+      let a;
+      try {
+        a = await api('GET', '/admin');
+      } catch {
+        return;
+      }
+      if (a.running || a.preparing) return pollAdmin();
+      const box = $('#wo-status');
+      if (box && store.admin) {
+        store.admin.without = a.without;
+        fill(box, withoutStatus(a.without));
+      }
+      if (a.without.waiting) pollWithout();
+      else load();
+    }, 5000);
   }
 
   // ------------------------------------------------------------------ load
@@ -831,5 +902,6 @@
   if (storage.get(TOKEN_KEY)) load(true);
   else showLogin();
   // keep panels fresh so new results show up; the editor is never overwritten
-  setInterval(() => store.me && !store.admin?.running && !store.admin?.preparing && load(), 20000);
+  // (while a day runs, pollAdmin takes over; restarting it here keeps a page that saw a run start from going stale)
+  setInterval(() => store.me && (store.admin?.running || store.admin?.preparing ? pollAdmin() : load()), 20000);
 })();

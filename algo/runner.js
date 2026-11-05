@@ -18,16 +18,24 @@ export function pythonPath() {
  * Start a player's Trader in its own Python process (see py/host.py for the sandbox).
  *
  * run(state) resolves with { orders, traderData, logs, error, cpuUs } (cpuUs: CPU time Trader.run used, in µs).
- * A call slower than timeLimitMs counts as no orders; a call that hangs past the hard limit, or a crash, stops the
- * algorithm for the rest of the day.
+ * A call slower than timeLimitMs counts as no orders (and says `slow: true`); a call that hangs past the hard limit,
+ * or a crash, stops the algorithm for the rest of the day.
+ * background: run at the lowest OS priority (re-runs of past days, so they don't slow anyone's backtests).
  */
-export async function startAgent({ name, code, timeLimitMs = 400, cpuSeconds = 300, startupMs = 20000 }) {
+export async function startAgent({ name, code, timeLimitMs = 400, cpuSeconds = 300, startupMs = 20000, background = false }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'algo-'));
   const child = spawn(pythonPath(), ['-I', '-B', HOST], {
     cwd: dir,
     env: { PATH: '/usr/bin:/bin', HOME: dir, PYTHONDONTWRITEBYTECODE: '1', PYTHONIOENCODING: 'utf-8' },
     stdio: ['pipe', 'pipe', 'pipe', 'pipe'],
   });
+  if (background && child.pid) { // (without a pid, setPriority would lower the server's own priority)
+    try {
+      os.setPriority(child.pid, 19);
+    } catch {
+      // not allowed here; it just runs at normal priority
+    }
+  }
 
   let dead = null; // reason the algorithm stopped
   let deadReported = false;
@@ -116,7 +124,7 @@ export async function startAgent({ name, code, timeLimitMs = 400, cpuSeconds = 3
       const logs = startupLogs.length ? [...startupLogs, ...(reply.logs ?? [])] : reply.logs;
       startupLogs = [];
       if (reply.ms > timeLimitMs) {
-        return { orders: [], traderData: reply.traderData, logs, error: `Trader.run took ${reply.ms}ms (limit ${timeLimitMs}ms); orders ignored this tick`, cpuUs: reply.cpu_ns / 1000 };
+        return { orders: [], traderData: reply.traderData, logs, error: `Trader.run took ${reply.ms}ms (limit ${timeLimitMs}ms); orders ignored this tick`, cpuUs: reply.cpu_ns / 1000, slow: true };
       }
       return { orders: reply.orders, traderData: reply.traderData, logs, error: reply.error, cpuUs: reply.cpu_ns / 1000 };
     },
