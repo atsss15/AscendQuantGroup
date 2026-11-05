@@ -317,6 +317,19 @@ test('schedule: runs once a day at the set time (New York), from the start date'
   await svc.checkSchedule(at('2026-11-05', '14:30'));
   assert.equal(svc.state.days.at(-1).day, 2, 'a server that was down at noon catches up the same day');
   assert.throws(() => svc.setSchedule({ time: '25:00' }), /12:00/);
+
+  // Wednesdays to Fridays only (2026-11-06 is a Friday)
+  svc.setSchedule({ weekdays: [3, 4, 5] });
+  assert.equal(svc.nextRunAt(at('2026-11-06', '09:00')), at('2026-11-06', '12:00'), 'Friday still runs');
+  assert.equal(svc.nextRunAt(at('2026-11-06', '12:05')), at('2026-11-11', '12:00'), 'then not until Wednesday');
+  assert.equal(svc.checkSchedule(at('2026-11-07', '12:00')), null, 'no run on Saturday');
+  assert.equal(svc.checkSchedule(at('2026-11-10', '12:00')), null, 'or Tuesday');
+  await svc.checkSchedule(at('2026-11-11', '12:00'));
+  assert.equal(svc.state.days.at(-1).day, 3, 'Wednesday runs the next day');
+  assert.deepEqual(svc.scheduleView(at('2026-11-11', '13:00')).weekdays, [3, 4, 5]);
+  assert.throws(() => svc.setSchedule({ weekdays: [] }), /day of the week/);
+  svc.setSchedule({ weekdays: [0, 1, 2, 3, 4, 5, 6] });
+  assert.equal(svc.scheduleView().weekdays, null, 'all seven: every day');
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

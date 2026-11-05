@@ -299,14 +299,23 @@
         h('p', { class: 'muted small' }, 'Through each day, P&L marks positions to the mid price; each day ends at its official P&L, marked to fair value.'),
       ] : '',
       table(['#', 'player', 'total P&L'], board, me.practiceMode ? 'Nothing counts yet: it’s the practice week.' : 'The leaderboard fills in after the first day that counts.', [0, 2]),
-      without.length ? folded('without', 'Leaderboard without one player',
-        h('p', { class: 'muted small' }, 'The same days run again with one player left out: same seed and starting market, everyone else’s code from that day, and every order keeps its place in the queue. The bots react to who is trading, so prices can differ. Only the P&L is kept. “Change” is what leaving that player out did to each player’s P&L on those days.'),
+      without.length ? folded('without', 'Leaderboard without one player (unofficial, for information)',
+        h('p', { class: 'muted small' }, 'Not part of the competition: these don’t count anywhere. The same days run again with one player left out: same seed and starting market, everyone else’s code from that day, and every order keeps its place in the queue. The bots react to who is trading, so prices can differ. Only the P&L is kept. “Change” is what leaving that player out did to each player’s P&L on those days.'),
         without) : '',
       latest ? [h('h3', {}, `${dayLabel({ day: latest.day, counts: latest.counts })} standings`), table(['#', 'player', 'P&L'], latestRows, '', [0, 2])] : '',
       folded('mine', 'Your days', table(['day', 'P&L', 'total', '', ''], mine, 'No competition days have run yet.', [1, 2])),
     );
     if (me.leaderboard.length) drawLeaderboard(me);
   }
+
+  // Monday first; the numbers are JavaScript's (0 = Sunday)
+  const WEEK = [[1, 'Mon'], [2, 'Tue'], [3, 'Wed'], [4, 'Thu'], [5, 'Fri'], [6, 'Sat'], [0, 'Sun']];
+  // "every day", "every Wed, Thu and Fri"
+  const weekdaysText = (days) => {
+    if (!days) return 'every day';
+    const names = WEEK.filter(([d]) => days.includes(d)).map(([, n]) => n);
+    return `every ${names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0]}`;
+  };
 
   // "Day 2", "Days 1–3", "Days 1, 3"
   const daysText = (days) => (days.length === 1 ? `Day ${days[0]}`
@@ -666,9 +675,11 @@
     const schedOn = h('input', { type: 'checkbox', checked: sched.enabled });
     const schedTime = h('input', { type: 'time', value: sched.time });
     const schedStart = h('input', { type: 'date', value: sched.startDate ?? '' });
+    const schedDays = WEEK.map(([d]) => h('input', { type: 'checkbox', checked: !sched.weekdays || sched.weekdays.includes(d), value: d }));
     const saveSchedule = async () => {
       try {
-        const s = await api('POST', '/admin/schedule', { enabled: schedOn.checked, time: schedTime.value, startDate: schedStart.value });
+        const weekdays = schedDays.filter((b) => b.checked).map((b) => Number(b.value));
+        const s = await api('POST', '/admin/schedule', { enabled: schedOn.checked, time: schedTime.value, startDate: schedStart.value, weekdays });
         toast(s.enabled ? `Next run: Day ${a.nextDay} at ${when(s.nextRunAt, s.timeZone)}` : 'Automatic runs are off');
         load();
       } catch (err) {
@@ -743,7 +754,8 @@
             a.lastError ? h('span', { class: 'error small' }, `Last run failed: ${a.lastError}`) : ''),
       h('div', { class: 'toolbar small' },
         h('label', { class: 'toolbar' }, schedOn, 'Run automatically every day at'), schedTime,
-        h('span', { class: 'muted' }, `(${sched.timeZone}) starting`), schedStart,
+        h('span', { class: 'muted' }, `(${sched.timeZone}) on`), WEEK.map(([, name], i) => h('label', { class: 'toolbar' }, schedDays[i], name)),
+        h('span', { class: 'muted' }, 'starting'), schedStart,
         h('button', { type: 'button', class: 'small', onclick: saveSchedule }, 'Save'),
         h('span', { class: sched.enabled ? 'up' : 'muted' }, sched.enabled && sched.nextRunAt ? `Next: Day ${a.nextDay} ${when(sched.nextRunAt, sched.timeZone)}` : 'Off: days only run when you press Run')),
       h('label', { class: 'toolbar small' },
@@ -889,7 +901,7 @@
       h('p', {}, 'Matching: every algorithm acts on the same snapshot at the same time. Your orders first trade against the bots\' quotes (best price first), orders that cross other players clear in a batch auction, and what\'s left can be hit by taker bots. All orders are cancelled at the end of the tick.'),
       h('p', {}, 'Queue at the same price: the bots\' quotes come first (they were posted at the start of the tick), then algorithms in order of the CPU time their ', h('code', {}, 'Trader.run'), ' used that tick, fastest first. Backtests show your CPU time per call. To get ahead of slower players, be faster or improve the price.'),
       h('p', {}, me.schedule?.enabled
-        ? `A new day runs automatically every day at ${when(me.schedule.nextRunAt, me.schedule.timeZone).replace(/^.*, /, '')} with everyone's latest submission trading against the bots and each other. Your submission keeps running each day until you submit a new one.`
+        ? `A new day runs automatically ${weekdaysText(me.schedule.weekdays)} at ${when(me.schedule.nextRunAt, me.schedule.timeZone).replace(/^.*, /, '')} with everyone's latest submission trading against the bots and each other. Your submission keeps running each day until you submit a new one.`
         : 'Each day the admin simulates a new day with everyone\'s latest submission trading against the bots and each other.',
         ' P&L marks your position at fair value at the end of the day. That day\'s prices, trades and features are then released for backtesting.'),
       h('p', {}, 'Features: ', h('code', {}, 'state.observations.plainValueObservations'), ' holds this tick\'s published features (numbers, and a few categories as text). The Weather & features tab and ', h('code', {}, 'observations.csv'), ' have their history.'),

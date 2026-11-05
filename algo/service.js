@@ -440,9 +440,16 @@ export class AlgoService {
   // ---------------------------------------------------------------- schedule
 
   /** Run the next day automatically every day at `time` (in `timeZone`), from `startDate` on. */
-  setSchedule({ enabled, time, startDate, timeZone } = {}) {
+  setSchedule({ enabled, time, startDate, timeZone, weekdays } = {}) {
     const s = { ...this.state.schedule };
     if (enabled !== undefined) s.enabled = !!enabled;
+    if (weekdays !== undefined) {
+      // 0 = Sunday … 6 = Saturday; null or all seven = every day
+      if (weekdays !== null && (!Array.isArray(weekdays) || !weekdays.length || !weekdays.every((d) => Number.isInteger(d) && d >= 0 && d <= 6))) {
+        throw new AlgoError('Pick at least one day of the week');
+      }
+      s.weekdays = weekdays && new Set(weekdays).size < 7 ? [...new Set(weekdays)].sort() : null;
+    }
     if (time !== undefined) {
       if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) throw new AlgoError('Time must look like 12:00');
       s.time = time;
@@ -471,6 +478,7 @@ export class AlgoService {
     const { date: today, time } = zoned(now, s.timeZone);
     let date = s.startDate && s.startDate > today ? s.startDate : today;
     if (date === today && (time >= s.time || s.lastRun === today)) date = addDays(today, 1);
+    while (!runsOn(s, date)) date = addDays(date, 1);
     return zonedToUtc(date, s.time, s.timeZone);
   }
 
@@ -479,7 +487,7 @@ export class AlgoService {
     const s = this.state.schedule;
     if (!s.enabled || this.running || this.preparing) return null;
     const { date, time } = zoned(now, s.timeZone);
-    if (time < s.time || s.lastRun === date || (s.startDate && date < s.startDate)) return null;
+    if (time < s.time || s.lastRun === date || (s.startDate && date < s.startDate) || !runsOn(s, date)) return null;
     s.lastRun = date;
     this.save();
     this.lastError = null;
@@ -502,7 +510,7 @@ export class AlgoService {
 
   scheduleView(now = Date.now()) {
     const s = this.state.schedule;
-    return { enabled: s.enabled, time: s.time, timeZone: s.timeZone, startDate: s.startDate, nextRunAt: this.nextRunAt(now) };
+    return { enabled: s.enabled, time: s.time, timeZone: s.timeZone, startDate: s.startDate, weekdays: s.weekdays ?? null, nextRunAt: this.nextRunAt(now) };
   }
 
   dataFile(day, kind, userId) {
@@ -745,6 +753,12 @@ export function zonedToUtc(date, time, timeZone) {
     guess += wanted - Date.UTC(sy, sm - 1, sd, sh, smin);
   }
   return guess;
+}
+
+/** Whether the schedule runs on a calendar date (YYYY-MM-DD): its weekdays, or every day. */
+function runsOn(schedule, date) {
+  const [y, m, d] = date.split('-').map(Number);
+  return !schedule.weekdays || schedule.weekdays.includes(new Date(Date.UTC(y, m - 1, d)).getUTCDay());
 }
 
 function addDays(date, n) {
