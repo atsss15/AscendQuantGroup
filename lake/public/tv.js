@@ -322,10 +322,6 @@
     return h('span', { class: `pchip ${extra}`, style: `--c:${p.color ?? 'var(--muted)'}` }, h('i', { class: 'pdot' }), p.name);
   }
 
-  function lurkerCount(s, players) {
-    const n = Number(s.settings?.lurkers) || (players <= 6 ? 1 : 2);
-    return n === 1 ? '1 Lurker' : `${n} Lurkers`;
-  }
 
   function countdown(endsAt, cls = 'huge') {
     return h('div', { class: `count ${cls}`, 'data-ends': endsAt }, clock(remaining(endsAt)));
@@ -344,8 +340,7 @@
       h('section', { class: 'lobby-side' },
         h('h1', { class: 'title' }, 'Lake Lurkers'),
         h('p', { class: 'lead' }, s.gameNo ? `Game ${s.gameNo + 1} starts soon.` : 'Campers do chores. Lurkers hide among them.'),
-        h('h2', { class: 'section-h' }, `Players · ${playing.length}`,
-          playing.length ? h('span', { class: 'muted' }, ` · ${lurkerCount(s, playing.length)}`) : ''),
+        h('h2', { class: 'section-h' }, `Players · ${playing.length}`),
         players.length
           ? h('div', { class: 'chips' }, players.map((p) => playerChip(p, p.sitOut ? 'dim' : '')))
           : h('p', { class: 'lead' }, 'Nobody yet. Be the first!'),
@@ -370,7 +365,7 @@
       h('header', { class: 'tv-head' },
         h('b', {}, `Game ${s.gameNo}`),
         h('span', { class: 'grow' }),
-        h('span', {}, `${inGame.length} players · ${lurkerCount(s, inGame.length)}`)),
+        h('span', {}, `${inGame.length} players`)),
       h('section', { class: 'chores' },
         h('div', { class: 'chores-label' }, h('span', {}, 'Chores done'), h('b', {}, `${pct}%`)),
         h('div', { class: 'bar' }, fill),

@@ -7,7 +7,7 @@ import QRCode from 'qrcode';
 import { LakeStore, LakeError } from './store.js';
 
 const PUBLIC = fileURLToPath(new URL('./public', import.meta.url));
-const PAGES = { '/lake': 'index.html', '/lake/s/:code': 'index.html', '/lake/tv': 'tv.html', '/lake/print': 'print.html', '/lake/rules': 'rules.html' };
+const PAGES = { '/lake': 'index.html', '/lake/s/:code': 'index.html', '/lake/admin': 'index.html', '/lake/host': 'index.html', '/lake/tv': 'tv.html', '/lake/print': 'print.html', '/lake/rules': 'rules.html' };
 const IMAGE = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/;
 const MAX_PHOTO_BYTES = 6 * 1024 * 1024;
 const MAX_PHOTOS = 2000;

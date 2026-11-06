@@ -191,6 +191,8 @@
 
   const scanned = location.pathname.match(/^\/lake\/s\/([^/?#]+)/);
   if (scanned) ui.pendingCode = decodeURIComponent(scanned[1]);
+  // /lake/admin (or /lake/host) asks for the host password straight away
+  let askHost = /^\/lake\/(admin|host)\/?$/.test(location.pathname);
 
   // the "Reconnecting…" pill shows after a couple of seconds without the server (also if it never connected)
   let offlineTimer = setTimeout(() => { $('#offline').hidden = false; }, 4000);
@@ -211,6 +213,8 @@
     }
     store.ready = true;
     render();
+    if (askHost && !store.isHost) openHostLogin();
+    askHost = false;
   });
   socket.on('disconnect', () => {
     $('#conn').classList.remove('on');
@@ -826,6 +830,7 @@
         ui.pendingCode ? h('p', { class: 'notice' }, 'Sign in first. Then the station you scanned opens.') : '',
         form,
         h('p', { class: 'center' }, h('a', { class: 'btn-link', href: '/lake/rules', target: '_blank', rel: 'noopener' }, '📖 How to play')),
+        hostUI.el, // a host-only device (like the TV laptop) can run games without joining as a player
         footerEl),
     };
   }
