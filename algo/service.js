@@ -767,7 +767,6 @@ function addDays(date, n) {
 
 function checkCode(code) {
   if (typeof code !== 'string' || !code.trim()) throw new AlgoError('Your file is empty');
-  if (code.length > 200_000) throw new AlgoError('Your file is over 200 KB');
   return code;
 }
 
