@@ -21,7 +21,7 @@ export function attachAlgo(server, { config, dir = path.resolve('data', 'algo'),
   if (scheduler) service.startScheduler();
 
   const api = express.Router();
-  api.use(express.json({ limit: '1mb' }));
+  api.use(express.json({ limit: '10mb' }));
 
   // sign in with an exchange account (same token works on the exchange)
   api.get('/accounts', (req, res) => res.json({ names: [...exchange.users.values()].map((u) => u.name).sort() }));
