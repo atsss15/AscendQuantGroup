@@ -51,6 +51,10 @@ const BELL_AFTER_MEETING = 30;
 const STORM_AFTER_MEETING = 60;
 const WRONG_CODES = 5;
 const LOCK_SECONDS = 30;
+const WRONG_PINS = 5; // then that name is locked for PIN_LOCK_SECONDS, so nobody can guess their way into someone's role
+const PIN_LOCK_SECONDS = 60;
+const MAX_PLAYERS = 40;
+const MAX_PHOTOS_PER_GAME = 20; // per player; keeps a runaway phone from filling the disk
 
 const COLORS = ['#f85149', '#58a6ff', '#3fb950', '#d29922', '#bc8cff', '#ff7b72', '#39c5cf', '#f778ba', '#e3b341', '#7ee787', '#a5d6ff', '#ffa657'];
 const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
@@ -67,6 +71,17 @@ const shuffle = (xs) => {
   }
   return a;
 };
+
+/** Settings loaded from disk, with anything out of range (or naming a station that no longer exists) put back to its default. */
+function cleanSettings(s) {
+  for (const [key, [lo, hi]] of Object.entries(RANGES)) if (!(Number.isInteger(s[key]) && s[key] >= lo && s[key] <= hi)) s[key] = DEFAULTS[key];
+  for (const key of FLAGS) s[key] = !!s[key];
+  if (s.barMode !== 'live' && s.barMode !== 'meetings') s.barMode = DEFAULTS.barMode;
+  const ids = Array.isArray(s.stormStations) ? s.stormStations : [];
+  if (ids.length !== 2 || ids[0] === ids[1] || !ids.every((id) => STATION.has(id) && id !== CAMPFIRE)) s.stormStations = [...STORM_DEFAULT];
+  s.disabled = (Array.isArray(s.disabled) ? s.disabled : []).filter((id) => STATION.has(id) && id !== CAMPFIRE);
+  return s;
+}
 
 /**
  * Lake Lurkers: players, settings and the game in progress. Every rule is enforced here; the server only relays.
@@ -86,21 +101,34 @@ export class LakeStore extends EventEmitter {
     this.paused = false;
     this.pausedAt = null;
     this.game = null;
-    this.photos = []; // { id, mime, gameNo, by, partner, title, at }
+    this.photos = []; // { id, mime, gameNo, by, byId, partner, title, at, bytes }
+    this.savedAt = null; // when the loaded state was saved (see pauseAfterRestart)
+    this.loginFails = new Map(); // lowercased name -> { n, until }; not saved
     this.ensureCodes();
   }
 
-  static fromJSON(data) {
-    const store = new LakeStore();
-    Object.assign(store, { ...data, players: new Map(data.players.map((p) => [p.id, p])) });
-    store.settings = { ...structuredClone(DEFAULTS), ...data.settings };
+  static fromJSON(data, opts) {
+    const store = new LakeStore(opts);
+    Object.assign(store, { ...data, players: new Map(data.players.map((p) => [p.id, p])), loginFails: new Map() });
+    store.settings = cleanSettings({ ...structuredClone(DEFAULTS), ...data.settings });
     store.ensureCodes();
     return store;
   }
 
   toJSON() {
     const { players, seq, hostTokens, settings, codes, phase, gameNo, paused, pausedAt, game, photos } = this;
-    return { players: [...players.values()], seq, hostTokens, settings, codes, phase, gameNo, paused, pausedAt, game, photos };
+    return { players: [...players.values()], seq, hostTokens, settings, codes, phase, gameNo, paused, pausedAt, game, photos, savedAt: this.now() };
+  }
+
+  /**
+   * After a server restart in the middle of a game: freeze it as of the last save, so the downtime can't run out a
+   * storm, a Campfire stage or an undo window. The host presses Resume. Returns true if it paused the game.
+   */
+  pauseAfterRestart() {
+    if ((this.phase !== 'play' && this.phase !== 'meeting') || this.paused) return false;
+    this.paused = true;
+    this.pausedAt = Math.min(this.savedAt ?? this.now(), this.now());
+    return true;
   }
 
   changed() {
@@ -127,7 +155,20 @@ export class LakeStore extends EventEmitter {
     if (!name) throw new LakeError('Enter your name');
     if (!/^\d{4}$/.test(pin)) throw new LakeError('Your PIN is 4 digits');
     let player = [...this.players.values()].find((p) => p.name.toLowerCase() === name.toLowerCase());
-    if (player && player.pin !== pin) throw new LakeError('That name is taken. Wrong PIN?');
+    if (player) {
+      // signing in as someone shows their role, so PIN guessing is slowed down to a handful a minute per name
+      const key = player.name.toLowerCase();
+      const now = this.now();
+      const fails = this.loginFails.get(key);
+      if (fails?.until > now) throw new LakeError(`Too many wrong PINs for that name. Try again in ${Math.ceil((fails.until - now) / 1000)} s`);
+      if (player.pin !== pin) {
+        const n = (fails?.n ?? 0) + 1;
+        this.loginFails.set(key, n >= WRONG_PINS ? { n: 0, until: now + PIN_LOCK_SECONDS * 1000 } : { n, until: 0 });
+        throw new LakeError('That name is taken. Wrong PIN?');
+      }
+      this.loginFails.delete(key);
+    }
+    if (!player && this.players.size >= MAX_PLAYERS) throw new LakeError('The game is full. Ask the host to remove old players.');
     if (!player) {
       const taken = new Set([...this.players.values()].map((p) => p.color));
       player = {
@@ -175,18 +216,21 @@ export class LakeStore extends EventEmitter {
     const p = this.players.get(playerId);
     if (!p) throw new LakeError('No such player');
     const g = this.game;
-    const gp = g?.players[playerId];
+    const gp = this.gp(playerId);
     if (gp && (this.phase === 'play' || this.phase === 'meeting')) {
       gp.kicked = true;
       gp.status = 'ghost';
       this.cancelRequests(playerId);
-      if (g.meeting) {
-        g.meeting.voters = g.meeting.voters.filter((id) => id !== playerId);
-        g.meeting.here = g.meeting.here.filter((id) => id !== playerId);
-        delete g.meeting.votes[playerId];
+      const m = g.meeting;
+      if (m && !m.result) {
+        // they leave the vote: their own vote goes, and votes for them are handed back so those players can vote again
+        m.voters = m.voters.filter((id) => id !== playerId);
+        m.here = m.here.filter((id) => id !== playerId);
+        delete m.votes[playerId];
+        for (const [voter, target] of Object.entries(m.votes)) if (target === playerId) delete m.votes[voter];
       }
       this.log(`${p.name} left the game`);
-      this.checkWin();
+      if (!this.checkWin() && m && !this.paused && this.allIn(m)) this.advance();
     }
     this.players.delete(playerId);
     this.emit('signout', playerId);
@@ -196,9 +240,12 @@ export class LakeStore extends EventEmitter {
   // ---- settings
 
   setSettings(patch = {}) {
+    // mid-game changes could strand chores at a station switched off, or move a storm station; the host form is lobby-only too
+    if (this.phase === 'play' || this.phase === 'meeting') throw new LakeError('Change the settings between games');
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new LakeError('Send the settings to change');
     const next = { ...this.settings };
     for (const [key, value] of Object.entries(patch)) {
-      if (key in RANGES) {
+      if (Object.hasOwn(RANGES, key)) {
         const n = Number(value);
         const [lo, hi] = RANGES[key];
         if (!Number.isInteger(n) || n < lo || n > hi) throw new LakeError(`${LABELS[key]} must be a whole number from ${lo} to ${hi}`);
@@ -250,6 +297,7 @@ export class LakeStore extends EventEmitter {
     const s = this.settings;
     if (s.taskCount + s.photoCount + s.carryCount === 0) return 'Give everyone at least one chore';
     if (s.storm && !s.stormStations.every((id) => this.enabled(id))) return 'Switch the storm stations on (or turn storms off)';
+    if (!this.deal().length) return 'No chores at the stations that are switched on';
     return null;
   }
 
@@ -375,13 +423,19 @@ export class LakeStore extends EventEmitter {
   }
 
   name(id) {
-    return this.game?.names[id] ?? this.players.get(id)?.name ?? '(gone)';
+    return (this.game && typeof id === 'string' && Object.hasOwn(this.game.names, id) ? this.game.names[id] : null) ?? this.players.get(id)?.name ?? '(gone)';
+  }
+
+  /** A player of the current game by id; null for anything else (ids come from clients, so never "__proto__" & co). */
+  gp(id) {
+    const ps = this.game?.players;
+    return ps && typeof id === 'string' && Object.hasOwn(ps, id) ? ps[id] : null;
   }
 
   me(playerId, { alive = true, ghost = false } = {}) {
     if (this.phase !== 'play' && this.phase !== 'meeting') throw new LakeError('No game is on');
     if (this.paused) throw new LakeError('The game is paused');
-    const p = this.game.players[playerId];
+    const p = this.gp(playerId);
     if (!p || p.kicked) throw new LakeError("You're not in this game");
     const ok = (alive && p.status === 'alive') || (ghost && p.status === 'ghost');
     if (!ok) throw new LakeError(p.status === 'dead' ? "You're dead. Stay put and stay silent." : "Ghosts can't do that");
@@ -432,13 +486,19 @@ export class LakeStore extends EventEmitter {
     if (p.role === 'camper') this.checkWin();
   }
 
-  cancelRequests(playerId) {
+  /**
+   * Drops photo requests to (and unless `toOnly`, from) a player. Only call it once their being out is public (kick,
+   * Campfire reveal, ejection): the requester's phone sees its photo stop waiting, so doing it at a kill would give the
+   * kill away. A request to a secretly dead partner just goes unanswered.
+   */
+  cancelRequests(playerId, { toOnly = false } = {}) {
     const g = this.game;
-    for (const r of g.requests.filter((r) => r.from === playerId || r.to === playerId)) {
-      const c = g.players[r.from]?.chores.find((x) => x.id === r.choreId);
-      if (c) c.pending = null;
+    const hit = (r) => r.to === playerId || (!toOnly && r.from === playerId);
+    for (const r of g.requests.filter(hit)) {
+      const c = this.gp(r.from)?.chores.find((x) => x.id === r.choreId);
+      if (c && c.pending === r.id) c.pending = null;
     }
-    g.requests = g.requests.filter((r) => r.from !== playerId && r.to !== playerId);
+    g.requests = g.requests.filter((r) => !hit(r));
   }
 
   // ---- chores
@@ -484,19 +544,21 @@ export class LakeStore extends EventEmitter {
     if (this.stationOfCode(code) !== def.station) throw new LakeError(`Take this photo at the ${STATION.get(def.station).name}`);
     const needsPartner = def.partner && p.status === 'alive';
     if (needsPartner) {
-      const q = this.game.players[partnerId];
+      const q = this.gp(partnerId);
       // a secretly dead partner is accepted (the request just never gets an answer), so the error can't reveal a death
       if (!q || partnerId === playerId || q.status === 'ghost' || q.kicked) throw new LakeError('Pick another player who was in the photo');
     }
+    const mine = this.photos.filter((ph) => ph.gameNo === this.gameNo && ph.byId === playerId).length;
+    if (mine >= MAX_PHOTOS_PER_GAME) throw new LakeError(`That's ${MAX_PHOTOS_PER_GAME} photos from you this game, the most there can be`);
     return { needsPartner };
   }
 
-  addPhoto(playerId, args, { id, mime }) {
+  addPhoto(playerId, args, { id, mime, bytes = null }) {
     const { needsPartner } = this.checkPhoto(playerId, args);
-    const p = this.game.players[playerId];
+    const p = this.gp(playerId);
     const c = this.chore(p, args.choreId);
     const def = CHORE.get(c.ref);
-    this.photos.push({ id, mime, gameNo: this.gameNo, by: this.name(playerId), partner: null, title: def.title, at: this.now() });
+    this.photos.push({ id, mime, gameNo: this.gameNo, by: this.name(playerId), byId: playerId, partner: null, title: def.title, at: this.now(), bytes });
     let requestId = null;
     if (c.pending) this.game.requests = this.game.requests.filter((r) => r.id !== c.pending); // a retake replaces the old request
     if (needsPartner) {
@@ -516,9 +578,9 @@ export class LakeStore extends EventEmitter {
     if (!r) throw new LakeError('That request is gone');
     this.inPlay(playerId);
     g.requests = g.requests.filter((x) => x !== r);
-    const from = g.players[r.from];
-    const c = from.chores.find((x) => x.id === r.choreId);
-    if (c) c.pending = null;
+    const from = this.gp(r.from);
+    const c = from?.chores.find((x) => x.id === r.choreId);
+    if (c && c.pending === r.id) c.pending = null;
     if (yes) {
       const photo = this.photos.find((x) => x.id === r.photoId);
       if (photo) photo.partner = this.name(playerId);
@@ -535,7 +597,7 @@ export class LakeStore extends EventEmitter {
     if (p.role !== 'lurker') throw new LakeError("Campers can't do that");
     const now = this.now();
     if (now < p.killReadyAt) throw new LakeError(`Wait ${Math.ceil((p.killReadyAt - now) / 1000)} s`);
-    const t = this.game.players[targetId];
+    const t = this.gp(targetId);
     if (!t || t.kicked || t.role !== 'camper' || t.status !== 'alive') throw new LakeError('Pick a living Camper');
     const used = new Set(Object.values(this.game.players).map((x) => x.death?.bodyCode));
     let bodyCode;
@@ -544,7 +606,7 @@ export class LakeStore extends EventEmitter {
     t.status = 'dead';
     t.death = { by: playerId, at: now, bodyCode, undoUntil: now + this.settings.undoSeconds * 1000, prevKillReadyAt: p.killReadyAt };
     p.killReadyAt = now + this.settings.killCooldown * 1000;
-    this.cancelRequests(targetId);
+    // photo requests to/from the victim stay put: dropping them now would tell the other player about the kill
     this.log(`${this.name(playerId)} killed ${this.name(targetId)}`);
     this.checkWin();
     this.changed();
@@ -554,10 +616,16 @@ export class LakeStore extends EventEmitter {
   undoDeath(playerId) {
     if (this.phase !== 'play') throw new LakeError('Too late to undo');
     if (this.paused) throw new LakeError('The game is paused');
-    const p = this.game.players[playerId];
-    if (!p || p.status !== 'dead' || this.now() > p.death.undoUntil) throw new LakeError('Too late to undo');
-    const killer = this.game.players[p.death.by];
-    if (killer) killer.killReadyAt = p.death.prevKillReadyAt;
+    const p = this.gp(playerId);
+    if (!p || p.kicked || p.status !== 'dead' || this.now() > p.death.undoUntil) throw new LakeError('Too late to undo');
+    const killer = this.gp(p.death.by);
+    // if the killer has killed again since (short cooldown), their cooldown is from that kill: leave it, and let that
+    // kill's undo restore what it was before this one
+    const next = Object.values(this.game.players)
+      .filter((x) => x !== p && x.status === 'dead' && x.death?.by === p.death.by && x.death.at >= p.death.at)
+      .sort((a, b) => a.death.at - b.death.at)[0];
+    if (next) next.death.prevKillReadyAt = p.death.prevKillReadyAt;
+    else if (killer) killer.killReadyAt = p.death.prevKillReadyAt;
     this.log(`${this.name(playerId)} said they weren't tapped, so the kill was undone`);
     p.status = 'alive';
     p.death = null;
@@ -613,6 +681,7 @@ export class LakeStore extends EventEmitter {
       if (p.status === 'dead') {
         p.status = 'ghost';
         newlyOut.push(this.name(id));
+        this.cancelRequests(id, { toOnly: true }); // ghosts can't be photo partners; the requester can retake now
       }
     }
     if (g.storm) {
@@ -643,9 +712,16 @@ export class LakeStore extends EventEmitter {
     const m = this.game.meeting;
     if (this.phase !== 'meeting' || m.stage !== 'gather') throw new LakeError('Not gathering now');
     if (!m.here.includes(playerId)) m.here.push(playerId);
-    if (m.voters.every((id) => m.here.includes(id))) this.advance();
+    if (this.allIn(m)) this.advance();
     this.changed();
     return {};
+  }
+
+  /** Everyone who can is here (gather) or has voted (vote), so the stage can end early. */
+  allIn(m) {
+    if (m.stage === 'gather') return m.voters.every((id) => m.here.includes(id));
+    if (m.stage === 'vote') return m.voters.every((id) => m.votes[id]);
+    return false;
   }
 
   vote(playerId, { target } = {}) {
@@ -656,7 +732,7 @@ export class LakeStore extends EventEmitter {
     if (m.votes[playerId]) throw new LakeError('You already voted');
     if (target !== 'skip' && !m.voters.includes(target)) throw new LakeError('Vote for a living player or skip');
     m.votes[playerId] = target;
-    if (m.voters.every((id) => m.votes[id])) this.advance();
+    if (this.allIn(m)) this.advance();
     this.changed();
     return {};
   }
@@ -682,6 +758,7 @@ export class LakeStore extends EventEmitter {
         const p = g.players[out];
         p.status = 'ghost';
         p.ejected = true;
+        this.cancelRequests(out, { toOnly: true });
         this.log(`${this.name(out)} was voted out (${p.role === 'lurker' ? 'a Lurker' : 'a Camper'})`);
       } else {
         this.log('Nobody was voted out');
@@ -766,7 +843,7 @@ export class LakeStore extends EventEmitter {
 
   resume() {
     if (!this.paused) return;
-    const dt = this.now() - this.pausedAt;
+    const dt = Number.isFinite(this.pausedAt) ? Math.max(0, this.now() - this.pausedAt) : 0;
     const g = this.game;
     if (g.meeting) g.meeting.endsAt += dt;
     if (g.storm) g.storm.endsAt += dt;
@@ -793,7 +870,8 @@ export class LakeStore extends EventEmitter {
     if (this.paused || !this.game) return;
     const now = this.now();
     const g = this.game;
-    if (this.phase === 'meeting' && now >= g.meeting.endsAt) this.advance();
+    // allIn too: a stage whose last missing player was kicked while paused still ends early
+    if (this.phase === 'meeting' && g.meeting && (now >= g.meeting.endsAt || this.allIn(g.meeting))) this.advance();
     else if (this.phase === 'play' && g.storm && now >= g.storm.endsAt) {
       this.finish('lurkers', "the storm wasn't secured in time");
       this.changed();
@@ -819,7 +897,8 @@ export class LakeStore extends EventEmitter {
     const g = this.game;
     const live = g && this.phase !== 'lobby';
     const me = this.players.get(playerId);
-    const station = (id) => STATION.get(id);
+    // a saved game can name a station or chore that was since renamed in stations.js: show a stand-in, never throw
+    const station = (id) => STATION.get(id) ?? { id, name: '?', floor: '', where: '' };
     const state = {
       now: this.now(),
       me: me ? { id: me.id, name: me.name, color: me.color, sitOut: me.sitOut } : null,
@@ -890,7 +969,7 @@ export class LakeStore extends EventEmitter {
         photos: this.photos.filter((ph) => ph.gameNo === g.no).map((ph) => this.photoView(ph, viewerToken)),
       };
     }
-    const p = g.players[playerId];
+    const p = this.gp(playerId);
     if (p && !p.kicked) {
       const lurker = p.role === 'lurker';
       state.you = {
@@ -899,7 +978,7 @@ export class LakeStore extends EventEmitter {
         status: p.status,
         death: p.death ? { by: this.name(p.death.by), at: p.death.at, bodyCode: p.death.bodyCode, undoUntil: p.death.undoUntil } : null,
         ejected: p.ejected,
-        chores: p.chores.map((c) => {
+        chores: p.chores.filter((c) => CHORE.has(c.ref)).map((c) => {
           const d = CHORE.get(c.ref);
           const at = d.kind === 'carry' ? (c.step === 0 ? d.from : d.to) : d.station;
           return {
@@ -929,9 +1008,9 @@ export class LakeStore extends EventEmitter {
         stormReadyAt: lurker && this.settings.storm ? g.stormReadyAt : null,
         myVote: g.meeting?.votes[playerId] ?? null,
         confirms: g.requests.filter((r) => r.to === playerId).map((r) => {
-          const d = CHORE.get(g.players[r.from].chores.find((c) => c.id === r.choreId).ref);
+          const d = CHORE.get(this.gp(r.from)?.chores.find((c) => c.id === r.choreId)?.ref);
           const ph = this.photoMeta(r.photoId);
-          return { requestId: r.id, from: this.name(r.from), title: d.title, prompt: d.prompt, url: ph ? this.photoView(ph, viewerToken).url : null };
+          return { requestId: r.id, from: this.name(r.from), title: d?.title ?? 'Photo', prompt: d?.prompt ?? null, url: ph ? this.photoView(ph, viewerToken).url : null };
         }),
         lockUntil: p.lockUntil,
       };

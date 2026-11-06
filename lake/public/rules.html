@@ -9,11 +9,12 @@
   <link rel="stylesheet" href="/style.css">
   <style>
     /* Rulebook only: a readable single column on top of the shared dark theme. */
-    body { font-size: 16px; line-height: 1.55; }
+    body { font-size: 16px; line-height: 1.55; overflow-wrap: break-word; }
     a { color: var(--accent); }
     .topbar a.play { margin-left: auto; background: var(--accent); color: #0d1117; font-weight: 600; text-decoration: none; padding: 8px 14px; border-radius: 6px; }
 
     .rules { max-width: 720px; margin: 0 auto; padding: 16px 16px 48px; display: grid; gap: 16px; }
+    .rules > * { min-width: 0; }
     .hero h1 { margin: 6px 0 4px; font-size: 32px; line-height: 1.15; }
     .lede { margin: 0 0 6px; font-size: 18px; }
     .toc { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -37,6 +38,7 @@
     .camper { color: var(--green); font-weight: 700; }
     .lurker { color: var(--red); font-weight: 700; }
     .say { color: var(--amber); font-weight: 700; white-space: nowrap; }
+    /* a button or label exactly as the game app words it */
     .ui { white-space: nowrap; font-weight: 600; font-size: 0.92em; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 0 6px; }
     .code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; background: var(--panel-2); border-radius: 4px; padding: 0 6px; }
     .site { font-weight: 700; white-space: nowrap; }
@@ -75,7 +77,7 @@
     .sec .oob li { margin: 0; background: var(--red-bg); color: #ffb3ad; border-radius: 999px; padding: 4px 12px; font-weight: 600; }
 
     /* Campfire stages */
-    .stages { list-style: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+    .stages { list-style: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px; }
     .sec ol.stages { padding: 0; }
     .sec .stages li { margin: 0; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font-size: 15px; }
     .stages .stage { display: flex; flex-wrap: wrap; justify-content: space-between; column-gap: 8px; font-weight: 700; font-size: 17px; margin-bottom: 2px; }
@@ -117,18 +119,20 @@
     <div class="hero">
       <h1>Lake Lurkers</h1>
       <p class="lede">A real-life game of chores, secrets and shoulder taps. The Campers keep the lake house running. Hidden among them: <b data-s="lurkers" data-unit="Lurker">2 Lurkers</b>. Find them before they get you.</p>
-      <p class="small muted" id="live-note">Times on this page are the defaults. The host can change them, and the game app always shows the live numbers.</p>
+      <p class="small muted" id="live-note">Times on this page are the defaults. The host can change them between games, and the game app always shows the live numbers.</p>
     </div>
 
     <nav class="toc" aria-label="Sections">
       <a href="#quick">60 seconds</a>
+      <a href="#roles">Roles</a>
       <a href="#setup">Setup</a>
       <a href="#house">The house</a>
       <a href="#chores">Chores</a>
       <a href="#kills">Kills</a>
+      <a href="#report">Bodies + bell</a>
       <a href="#campfire">Campfire</a>
       <a href="#ghosts">Ghosts</a>
-      <a href="#storm">Storm</a>
+      <a href="#storm" data-hide="stormOff">Storm</a>
       <a href="#win">Winning</a>
       <a href="#safety">Safety</a>
       <a href="#tips">Tips</a>
@@ -142,14 +146,14 @@
       <h2>The 60-second version</h2>
       <ol>
         <li><b>Sign in</b> at <a class="site" href="/lake">ascend-exchange.fly.dev/lake</a> with your name and a 4-digit PIN. Meet at the <b>Campfire</b>: the Great Room, by the big fireplace.</li>
-        <li><b>Peek at your role</b> (press and hold the role card). Most of you are <span class="camper">Campers</span>. <b data-s="lurkers" data-unit="Lurker">2 Lurkers</b> hide among you, and they know each other.</li>
+        <li><b>Peek at your role:</b> press and hold the role card, then tap <span class="ui">Hide</span>. Most of you are <span class="camper">Campers</span>. Hidden among you: <b data-s="lurkers" data-unit="Lurker">2 Lurkers</b>, and Lurkers know each other.</li>
         <li><b>Campers</b> scan the QR codes around the house and do their chores. Fill the chore bar or vote out every Lurker to win.</li>
-        <li><b>Lurkers</b> blend in, fake chores, and kill Campers: a tap on the shoulder, then confirm on the phone.</li>
-        <li><b>Tapped?</b> Sit or lie down right there, stay silent, and show your 3-digit body code.</li>
-        <li><b>Found a body?</b> Type its code under <span class="ui">Report a body</span> and shout <span class="say">“Campfire!”</span> Everyone walks to the Great Room.</li>
-        <li><b>At the Campfire</b>, talk for <span data-s="discussSeconds">3 min</span>, then vote on your phone. Most votes (and more than Skip) is out. A tie means nobody.</li>
+        <li><b>Lurkers</b> blend in, fake chores, and kill Campers: a tap on the shoulder, then confirm the kill on their phone.</li>
+        <li><b>Killed?</b> Your phone tells you. Sit or lie down right there, stay silent, and show your 3-digit body code.</li>
+        <li><b>Found a body?</b> Type its code in the <span class="ui">Found a body?</span> box, tap <span class="ui">Report</span>, and shout <span class="say">“Campfire!”</span> Everyone walks to the Great Room.</li>
+        <li><b>At the Campfire</b>, tap <span class="ui">I’m here</span>, talk for <span data-s="discussSeconds">3 min</span>, then vote: tap a name or Skip, then <span class="ui">Yes, vote</span>. Most votes (and more than Skip) is out. A tie means nobody.</li>
         <li><b>Out?</b> You’re a ghost: wear a ghost marker, stay silent, keep doing chores.</li>
-        <li data-hide="stormOff"><b>Storm!</b> When the Lurkers start one, two different players must secure <b data-storm="0">Upstairs Hall</b> and <b data-storm="1">Screened Patio</b> within <span data-s="stormSeconds">90 sec</span>, or the Lurkers win.</li>
+        <li data-hide="stormOff"><b>Storm!</b> When the Lurkers start one, two different living players must secure <b data-storm="0">Upstairs Hall</b> and <b data-storm="1">Screened Patio</b> within <span data-s="stormSeconds">90 sec</span>, or the Lurkers win.</li>
         <li><b>Talk any time.</b> Walk, don’t run. Stay out of the water. Shout <span class="say">“PAUSE”</span> for anything real.</li>
       </ol>
     </section>
@@ -176,14 +180,16 @@
         <div class="side l">
           <h3><span class="lurker">Lurkers</span></h3>
           <ul>
-            <li>Act like a Camper. Fake your chores.</li>
+            <li>Act like a Camper. You get a chore list too: do it anyway, it just never counts.</li>
             <li>Kill Campers one by one<span data-hide="stormOff"> and start storms</span>.</li>
-            <li>You see the other Lurker’s name on your role card. Work together.</li>
+            <li>Your role card tells you who the other Lurker is (if there is one). Work together.</li>
           </ul>
         </div>
       </div>
+      <h3>Your role card</h3>
+      <p>Press and hold the card on the game page to see your role. It stays open (Lurkers kill from it) until you tap <span class="ui">Hide</span>, and it closes by itself after 15 sec without a tap on it, or when you lock your phone.</p>
       <div class="callout red">
-        <p><b>Never show your role card to anyone.</b> Say whatever you like, but your screen is never proof. Everyone’s app looks the same, so a glance at someone’s phone gives nothing away.</p>
+        <p><b>Never show your role card to anyone.</b> Say whatever you like, but your screen is never proof. Everyone’s app looks the same until the card is held, so a glance at someone’s phone gives nothing away. Open it where nobody can see your screen.</p>
       </div>
     </section>
 
@@ -194,18 +200,19 @@
       <ol>
         <li>Open <a class="site" href="/lake">ascend-exchange.fly.dev/lake</a> in your phone’s browser, or scan the Join QR on the TV. Nothing to install.</li>
         <li>Sign in with your <b>name</b> and a <b>4-digit PIN</b> you’ll remember. The same name and PIN get you back in on any device.</li>
-        <li>Turn your volume up and leave <span class="ui">Keep screen on</span> switched on. Your phone beeps for Campfires, storms and photo requests, but only while the game page is open.</li>
+        <li><b>Make sure you’ll hear the alarms.</b> Volume up (on newer iPhones the game plays even on silent; on older ones, turn the ringer on too), and the button at the bottom of the game page should say <span class="ui">🔊 Sound on</span>.</li>
+        <li><b>Keep the game page open with the screen on.</b> During a game the bottom of the page shows <span class="ui">☀️ Screen stays on</span>: leave it like that. No such button? Set Auto-Lock to Never while you play. Your phone beeps for Campfires, storms and photo requests only while the game page is open and the screen is on, and iPhones never vibrate for it.</li>
         <li>Meet at the <b>Campfire</b>: the <b>Great Room, by the big fireplace</b>, where the TV is. The TV shows the chore bar, who’s out, Campfire timers and storms.</li>
-        <li>The host taps <span class="ui">Start</span>. Peek at your role, check your chore list, and spread out. No kills for the first <span data-s="startGrace">60 sec</span>.</li>
+        <li>The host starts the game. Peek at your role, check your chore list, and spread out. No kills for the first <span data-s="startGrace">60 sec</span>, and no bell for the first 30 sec.</li>
       </ol>
-      <p class="muted">Want to skip a game? Tap <span class="ui">Sit out</span> in the lobby before it starts.</p>
+      <p class="muted">Want to skip a game? Switch on <span class="ui">Sit out the next game</span> in the lobby before the host starts.</p>
     </section>
 
     <!-- ------------------------------------------------------------ the house -->
 
     <section class="sec" id="house">
       <h2>The house</h2>
-      <p>Every station has a QR card. Scan it with your phone’s normal camera app. If it won’t scan, type the code printed under it into the <span class="ui">Scan</span> box in the game.</p>
+      <p>Every station has a QR card. Scan it with your phone’s normal camera app and the station opens in the game. If it won’t scan, type the code printed under it into the <span class="ui">At a station?</span> box on the game page and tap <span class="ui">Go</span>.</p>
 
       <h3>Main floor</h3>
       <ul class="stations">
@@ -258,16 +265,17 @@
 
     <section class="sec" id="chores">
       <h2>Chores</h2>
-      <p>You get <b data-s="taskCount" data-unit="task">3 tasks</b>, <b data-s="photoCount" data-unit="photo">1 photo</b> and <b data-s="carryCount" data-unit="carry">1 carry</b>, at stations all over the house. Your chore list says where to go. Scan the station, then:</p>
+      <p>You get <b data-s="taskCount" data-unit="task">3 tasks</b>, <b data-s="photoCount" data-unit="photo">1 photo</b> and <b data-s="carryCount" data-unit="carry">1 carry</b>, at stations all over the house. <b>My chores</b> on your phone says where to go. Scan the station, then:</p>
       <ul>
-        <li><b>Task:</b> a quick puzzle on your phone (10 to 30 sec). Hold a button down (let go and it restarts), tap 1 to 10 in order, repeat a color pattern, or match the pairs.</li>
-        <li><b>Photo:</b> take a photo at the station. Some need another living player in the shot. Pick them in the app, and they tap <span class="ui">Yes</span> on their own phone to confirm. Every photo goes into the gallery at the end, so make it a good one.</li>
-        <li><b>Carry:</b> scan the pick-up station to grab the item (it’s imaginary), then walk it over and scan the drop-off station.</li>
+        <li><b>Task:</b> tap <span class="ui">Start: …</span> for that chore and solve a quick puzzle (about 10 to 30 sec). Hold a button for 8 sec (let go and it starts over), tap 1 to 10 in order (a wrong tap sends you back to 1), repeat a 5-step color pattern (a mistake replays it), or tap each picture on the left and then its twin on the right.</li>
+        <li><b>Photo:</b> tap the photo chore, then <span class="ui">📷 Open the camera</span>, take the shot, and tap <span class="ui">Send photo</span>. Some photos need another living player in the shot: pick them under “Who’s in it with you?”, and they tap <span class="ui">Yes</span> on their own phone. It only counts once they do. If they say No, take it again. No answer? Go back to the station and tap <span class="ui">Retake with someone else</span>.</li>
+        <li><b>Carry:</b> scan the pick-up station and tap <span class="ui">📦 Pick up …</span> (the item is imaginary), walk it over, then scan the drop-off station and tap <span class="ui">📦 Drop off …</span>.</li>
       </ul>
+      <p>Every photo ends up in the <span class="ui">🖼 Photos</span> gallery and on the end screen, so make it a good one.</p>
       <h3>The chore bar</h3>
-      <p>The bar on every phone and on the TV fills as Campers finish chores. When it’s full, the Campers win. Lurkers get chore lists too, but theirs never count, and the app never says whose chores counted.</p>
+      <p>The bar on every phone and on the TV fills as Campers finish chores. When it’s full, the Campers win. Lurkers’ chores never count, and the app never says whose chores counted.</p>
       <p data-show="barMeetings" hidden><b>This game the bar only moves at Campfires</b>, so you can’t watch it to catch a fake chore.</p>
-      <p class="muted">No chores during a Campfire or while the game is paused.</p>
+      <p class="muted">No chores during a Campfire or while the game is paused. A Campfire closes any puzzle you’re in the middle of: just start it again afterwards.</p>
     </section>
 
     <!-- ------------------------------------------------------------ talking -->
@@ -285,24 +293,24 @@
       <h3>For Lurkers</h3>
       <ol>
         <li>Give a Camper a light <b>tap on the shoulder</b>.</li>
-        <li><b>Confirm on your phone right away:</b> open your role card, tap <span class="ui">Kill</span>, pick their name.</li>
+        <li><b>Confirm on your phone right away:</b> press and hold your role card, tap their name under <b>Kill</b>, then tap <span class="ui">Yes, kill …</span></li>
       </ol>
       <ul>
-        <li>Wait <b data-s="killCooldown">2½ min</b> between kills. The Kill button counts down.</li>
-        <li>No kills in the first <span data-s="startGrace">60 sec</span> of a game, or for <span data-s="killAfterMeeting">90 sec</span> after a Campfire.</li>
-        <li>No kills during a Campfire or a pause. Lurkers can’t kill each other, and ghosts can’t kill.</li>
+        <li>Wait <b data-s="killCooldown">2½ min</b> between kills. Until your next kill is ready, the names are greyed out and the card shows a countdown, like <span class="ui">Ready in 1:30</span>.</li>
+        <li>No kills in the first <span data-s="startGrace">60 sec</span> of a game. Every Campfire resets the Lurkers’ kills: none for <span data-s="killAfterMeeting">90 sec</span> after it ends.</li>
+        <li>No kills during a Campfire or a pause. Only living Campers are on the list: Lurkers can’t kill each other, nobody can kill a ghost, and ghosts can’t kill.</li>
         <li>Never tap anyone on the stairs or near the water.</li>
       </ul>
 
       <h3>If you’re killed</h3>
       <ul>
-        <li>Your phone shows who got you and a big <b>3-digit body code</b>, like <span class="code">417</span>.</li>
+        <li>Your phone says <b>You’ve been got!</b>, shows who got you, and a big <b>3-digit body code</b>, like <span class="code">417</span>.</li>
         <li><b>Sit or lie down right where you are.</b> On the stairs or the dock? Step to a safe spot first.</li>
-        <li><b>Stay silent.</b> No talking, no faces, no pointing. Hold your phone so whoever finds you can read the code.</li>
+        <li><b>Stay silent.</b> No talking, no faces, no pointing. Keep the screen on and hold your phone so whoever finds you can read the code.</li>
         <li>Stay put until a Campfire starts. Then you get up as a ghost.</li>
       </ul>
       <div class="callout">
-        <p><b>Nobody tapped you?</b> If your phone says you’re dead but nobody touched you, press <span class="ui">I wasn’t tapped</span> within <b data-s="undoSeconds">20 sec</b> (only before a Campfire starts). You’re alive again. Honor system: only if it’s true.</p>
+        <p><b>Nobody tapped you?</b> If your phone says you’re dead but nobody touched you, press <span class="ui">I wasn’t tapped!</span> within <b data-s="undoSeconds">20 sec</b>. The button disappears when the time is up, and it stops working once a Campfire starts. You’re alive again, and the Lurker gets their kill back. Honor system: only if it’s true.</p>
         <p>And the other way round: you’re only dead when your phone says so. A tap with no confirm means nothing.</p>
       </div>
     </section>
@@ -314,15 +322,15 @@
       <h3>Found a body?</h3>
       <ol>
         <li>Read the 3-digit code on their phone.</li>
-        <li>Type it under <span class="ui">Report a body</span> on your phone.</li>
-        <li>Shout <span class="say">“Campfire!”</span> A locked phone can’t buzz, so your voice is the alarm.</li>
+        <li>Type it in the <span class="ui">Found a body?</span> box on your phone and tap <span class="ui">Report</span>.</li>
+        <li>Shout <span class="say">“Campfire!”</span> A locked phone can’t beep, so your voice is the alarm.</li>
       </ol>
       <p>Anyone alive can report a body, Lurkers included. After 5 wrong codes the box locks for 30 sec.</p>
       <h3>Ring the bell</h3>
-      <p>Want a Campfire without a body? Go to the Campfire, scan its QR, tap <span class="ui">Ring the bell</span>, and shout <span class="say">“Campfire!”</span></p>
+      <p>Want a Campfire without a body? Go to the Campfire, scan its QR, tap <span class="ui">Ring the bell</span>, then <span class="ui">Ring it!</span> to confirm, and shout <span class="say">“Campfire!”</span></p>
       <ul>
         <li>Each player can ring it <b data-s="emergencies">once</b> per game.</li>
-        <li>Not during a storm, and not in the first 30 sec after a Campfire.</li>
+        <li>Not in the first 30 sec of a game or after a Campfire (the button counts down), and not during a storm.</li>
         <li>Ghosts can’t ring it.</li>
       </ul>
     </section>
@@ -331,11 +339,11 @@
 
     <section class="sec" id="campfire">
       <h2>Campfire</h2>
-      <p>A report or the bell starts a Campfire for everyone: phones sound an alarm and so does the TV. Stop what you’re doing (chores freeze anyway) and walk to the Great Room.</p>
+      <p>A report or the bell starts a Campfire for everyone: phones flash and sound an alarm, and so does the TV. Stop what you’re doing (chores freeze anyway) and walk to the Great Room.</p>
       <ol class="stages">
-        <li><div class="stage"><b>1. Gather</b> <span data-s="gatherSeconds">60 sec</span></div>Come to the Great Room and tap <span class="ui">I’m here</span>. Moves on early once everyone’s in.</li>
-        <li><div class="stage"><b>2. Discuss</b> <span data-s="discussSeconds">3 min</span></div>Phones and the TV show who called it, whose body, and everyone who died since the last Campfire. Talk it out.</li>
-        <li><div class="stage"><b>3. Vote</b> <span data-s="voteSeconds">60 sec</span></div>Vote on your phone for a living player, or <b>Skip</b>. One vote, no take-backs. Ends early once everyone has voted.</li>
+        <li><div class="stage"><b>1. Gather</b> <span data-s="gatherSeconds">60 sec</span></div>Come to the Great Room and tap <span class="ui">I’m here</span>. Moves on early once every living player is in.</li>
+        <li><div class="stage"><b>2. Discuss</b> <span data-s="discussSeconds">3 min</span></div>Phones and the TV show who called it, whose body, and everyone killed since the last Campfire. Talk it out.</li>
+        <li><div class="stage"><b>3. Vote</b> <span data-s="voteSeconds">60 sec</span></div>Tap a living player or <b>Skip</b>, then <span class="ui">Yes, vote</span> to confirm. <span class="ui">Back</span> lets you pick again, but once you’ve confirmed, your vote is final. Ends early once everyone has voted.</li>
         <li><div class="stage"><b>4. Result</b> <span data-s="resultSeconds">12 sec</span></div>The votes appear on every phone and the TV. Then the game goes on.</li>
       </ol>
       <h3>Who goes out</h3>
@@ -351,7 +359,7 @@
         <li data-hide="revealRole"><b>Roles stay hidden:</b> nobody learns whether the player voted out was a Camper or a Lurker.</li>
         <li data-show="revealRole" hidden><b>Roles are shown this game:</b> everyone learns whether the player voted out was a Camper or a Lurker.</li>
         <li>Every body is revealed at a Campfire, found or not.</li>
-        <li>Afterwards: no kills for <span data-s="killAfterMeeting">90 sec</span>, no bell for 30 sec, no storm for 60 sec.</li>
+        <li>Afterwards: no kills for <span data-s="killAfterMeeting">90 sec</span>, no bell for 30 sec<span data-hide="stormOff">, no storm for 60 sec</span>.</li>
       </ul>
     </section>
 
@@ -359,7 +367,7 @@
 
     <section class="sec" id="ghosts">
       <h2>Ghosts</h2>
-      <p>You become a ghost when a Campfire reveals your body or when you’re voted out.</p>
+      <p>You become a ghost when a Campfire reveals your body or when you’re voted out. Your phone says <b>👻 You’re a ghost.</b></p>
       <ul>
         <li>Put on a <b>ghost marker</b> (a bandana or glow stick from the host) so everyone can tell.</li>
         <li><b>Stay silent.</b> No talking, texting, pointing or faces. You know things. Keep them to yourself.</li>
@@ -375,13 +383,13 @@
     <section class="sec storm" id="storm">
       <h2>The storm</h2>
       <p data-show="stormOff" hidden class="callout amber"><b>Storms are switched off this game.</b></p>
-      <p>The Lurkers can start a storm from their phones. Every phone plays a siren and shows a countdown, and the TV turns red. You have <b data-s="stormSeconds">90 sec</b> to secure both storm stations:</p>
+      <p>The Lurkers start storms from their role card: <span class="ui">⛈ Start a storm</span>, then <span class="ui">Start it</span>. Every phone plays a siren and shows a countdown, and the TV turns red. You have <b data-s="stormSeconds">90 sec</b> to secure both storm stations:</p>
       <ul class="stations">
         <li><span class="name" data-storm="0">Upstairs Hall</span><span class="where" data-storm-where="0">Upstairs, the hallway outside the primary bedroom</span></li>
         <li><span class="name" data-storm="1">Screened Patio</span><span class="where" data-storm-where="1">Outside the basement living room, lake side</span></li>
       </ul>
       <ul>
-        <li>To secure one, scan its QR and hold <span class="ui">Secure for the storm</span> for 3 sec.</li>
+        <li>To secure one, scan its QR, then press and hold <span class="ui">Hold to secure (3 s)</span> until it fills. Let go early and it starts over.</li>
         <li>It takes <b>two different living players</b>, one at each station. Ghosts can’t help.</li>
         <li>Both secured: the storm is over. <b>Time runs out: the Lurkers win.</b></li>
         <li>Reporting a body cancels the storm, because the Campfire starts. You can’t ring the bell during a storm.</li>
@@ -426,7 +434,7 @@
         <li><b>Out of bounds stays out:</b> bedrooms, bathrooms, the water, the road, cars, garages.</li>
       </ul>
       <div class="callout red">
-        <p><b>Shout <span class="say">“PAUSE”</span> for anything real:</b> someone gets hurt, something spills or breaks, a phone goes in the water, someone’s at the door. Everyone freezes, the host pauses the app (all timers and cooldowns stop), and we pick up again when it’s sorted.</p>
+        <p><b>Shout <span class="say">“PAUSE”</span> for anything real:</b> someone gets hurt, something spills or breaks, a phone goes in the water, someone’s at the door. Everyone freezes, the host pauses the app (all timers and cooldowns stop, and nobody can do anything until it’s back on), and we pick up again when it’s sorted.</p>
       </div>
     </section>
 
@@ -439,16 +447,16 @@
         <li>Move in pairs or small groups. It’s harder to get tapped with witnesses around.</li>
         <li>Remember who you saw where, and when. Campfires are won with alibis.</li>
         <li>Watching someone do a chore proves nothing: Lurkers have chore lists too. Same for photos. Being in someone’s photo doesn’t clear them.</li>
-        <li>Save your bell for a real lead. You only get <span data-s="emergencies">once</span>.</li>
+        <li>Save your bell for a real lead. You can only ring it <span data-s="emergencies">once</span>.</li>
         <li data-hide="stormOff">Storm? Decide in seconds who goes up and who goes down, and say it out loud.</li>
         <li>Not sure? Vote Skip. Voting out a Camper helps the Lurkers.</li>
         <li>Ghost? Keep doing chores. The bar still needs you.</li>
       </ul>
       <h3>Lurkers</h3>
       <ul>
-        <li>Check that your Kill button is ready before you tap. A tap you can’t confirm gives you away.</li>
+        <li>Check that your kill is ready (names not greyed out) before you tap. A tap you can’t confirm gives you away.</li>
         <li>Kill where nobody’s looking, then walk off calmly. Or “find” the body and report it yourself.</li>
-        <li>Do your fake chores. Standing at a station is an alibi.</li>
+        <li>Do your chores. They don’t count, but standing at a station is an alibi.</li>
         <li data-hide="stormOff">A storm sends Campers to opposite ends of the house, alone. You can still kill during a storm, but a reported body ends it.</li>
         <li>Talk. Accuse, defend, vouch. For your partner, or against them if it saves you.</li>
         <li>Don’t stick to your partner all game. Two people who always vouch for each other look guilty.</li>
@@ -462,11 +470,11 @@
       <h2>FAQ</h2>
       <details class="faq">
         <summary>I lost my phone, or got signed out.</summary>
-        <p>Sign in again with the same name and PIN, on any phone. You’re right back where you were. If you borrowed a phone, sign out afterwards.</p>
+        <p>Sign in again with the same name and PIN, on any phone. You’re right back where you were. If you borrowed a phone, tap Sign out at the bottom of the page afterwards.</p>
       </details>
       <details class="faq">
         <summary>The QR code won’t scan.</summary>
-        <p>Type the code printed under it into the Scan box in the game.</p>
+        <p>Type the code printed under it into the “At a station?” box on the game page and tap Go.</p>
       </details>
       <details class="faq">
         <summary>I’m dead and nobody’s finding me.</summary>
@@ -478,7 +486,11 @@
       </details>
       <details class="faq">
         <summary>My phone says I’m dead, but nobody tapped me.</summary>
-        <p>Press “I wasn’t tapped” within <span data-s="undoSeconds">20 sec</span>. It only works before a Campfire starts.</p>
+        <p>Press “I wasn’t tapped!” within <span data-s="undoSeconds">20 sec</span>. It only works before a Campfire starts.</p>
+      </details>
+      <details class="faq">
+        <summary>My photo partner never answered.</summary>
+        <p>Maybe their phone is asleep, or they tapped “Not now” (they can still answer later from their game page). Whatever the reason, go back to the station and tap “Retake with someone else”. The chore only counts once your partner taps Yes.</p>
       </details>
       <details class="faq">
         <summary>Can I show my phone to prove I’m a Camper?</summary>
@@ -487,6 +499,10 @@
       <details class="faq">
         <summary>Do I have to come to every Campfire?</summary>
         <p>Yes, if you’re alive. Drop what you’re doing and walk over. Chores are frozen anyway.</p>
+      </details>
+      <details class="faq">
+        <summary>I tapped the wrong name when voting.</summary>
+        <p>Nothing happens until you tap “Yes, vote”. Tap “Back” and pick again. Once you’ve tapped “Yes, vote”, it’s final.</p>
       </details>
       <details class="faq">
         <summary>What if I don’t vote?</summary>
@@ -498,7 +514,11 @@
       </details>
       <details class="faq">
         <summary>My phone didn’t make a sound.</summary>
-        <p>Phones only beep while the game page is open, and a locked iPhone never buzzes. Keep the page open with Keep screen on, turn the volume up, and listen for “Campfire!” and the TV.</p>
+        <p>Phones only beep while the game page is open and the screen is on. Check that the volume is up (older iPhones also need the ringer on), and the button at the bottom says “Sound on”. After your phone has been asleep, tap the screen once to wake the sound up. iPhones never vibrate for the game, so listen for “Campfire!” and the TV.</p>
+      </details>
+      <details class="faq">
+        <summary>The page says “Reconnecting…”.</summary>
+        <p>The Wi-Fi dropped. Wait a few seconds, or reload the page. Nothing is lost: the game keeps going and you’re signed right back in. If the whole server restarted, the game comes back paused and the host presses Resume.</p>
       </details>
       <details class="faq">
         <summary>Bathroom or snack break?</summary>
@@ -510,11 +530,11 @@
       </details>
       <details class="faq">
         <summary>I want to sit a game out.</summary>
-        <p>Tap Sit out in the lobby before the game starts.</p>
+        <p>Switch on “Sit out the next game” in the lobby before the host starts. The host can also sit you out.</p>
       </details>
       <details class="faq">
         <summary>Who’s the host?</summary>
-        <p>Whoever signed in as host. They can play too. The host can start, pause and end games, skip ahead in a Campfire, and change settings like timers. The game app always shows the current numbers.</p>
+        <p>Whoever signed in as host. They can play too. The host can start, pause and end games, move a Campfire to its next stage early, sit players out or remove them, and change the settings (timers, chores, storms) between games, never during one. The game app always shows the current numbers.</p>
       </details>
     </section>
 
@@ -528,16 +548,20 @@
         <tr><td>No kills at the start</td><td class="v" data-s="startGrace">60 sec</td></tr>
         <tr><td>Time between kills</td><td class="v" data-s="killCooldown">2½ min</td></tr>
         <tr><td>No kills after a Campfire</td><td class="v" data-s="killAfterMeeting">90 sec</td></tr>
-        <tr><td>“I wasn’t tapped” window</td><td class="v" data-s="undoSeconds">20 sec</td></tr>
+        <tr><td>“I wasn’t tapped!” window</td><td class="v" data-s="undoSeconds">20 sec</td></tr>
         <tr><td>Bell rings per player</td><td class="v"><span data-s="emergencies">once</span> a game</td></tr>
+        <tr><td>No bell at the start or after a Campfire</td><td class="v">30 sec</td></tr>
         <tr><td>Campfire: gather</td><td class="v" data-s="gatherSeconds">60 sec</td></tr>
         <tr><td>Campfire: discuss</td><td class="v" data-s="discussSeconds">3 min</td></tr>
         <tr><td>Campfire: vote</td><td class="v" data-s="voteSeconds">60 sec</td></tr>
         <tr><td>Campfire: result</td><td class="v" data-s="resultSeconds">12 sec</td></tr>
         <tr data-hide="stormOff"><td>Storm: time to secure</td><td class="v" data-s="stormSeconds">90 sec</td></tr>
+        <tr data-hide="stormOff"><td>Storm: hold to secure a station</td><td class="v">3 sec</td></tr>
         <tr data-hide="stormOff"><td>Storm: earliest first one</td><td class="v" data-s="stormFirst">3 min</td></tr>
         <tr data-hide="stormOff"><td>Storm: gap after the last one</td><td class="v" data-s="stormCooldown">4 min</td></tr>
+        <tr data-hide="stormOff"><td>No storm after a Campfire</td><td class="v">60 sec</td></tr>
         <tr><td>Wrong body codes before a lock</td><td class="v">5 (30 sec lock)</td></tr>
+        <tr><td>Role card hides itself after</td><td class="v">15 sec</td></tr>
       </table>
     </section>
 
@@ -591,7 +615,8 @@
         const values = { ...set, lurkers: lurkerCount(st), choreTotal: set.taskCount + set.photoCount + set.carryCount };
         for (const el of $$('[data-s]')) {
           const v = values[el.dataset.s];
-          if (typeof v === 'number' && Number.isFinite(v)) el.textContent = format(el.dataset.s, v, el.dataset.unit);
+          el.dataset.def ??= el.textContent; // the default written in, for when a value goes back to unknown (Lurkers: Auto)
+          el.textContent = typeof v === 'number' && Number.isFinite(v) ? format(el.dataset.s, v, el.dataset.unit) : el.dataset.def;
         }
 
         const flags = {
@@ -625,7 +650,9 @@
           });
         }
 
-        document.getElementById('live-note').textContent = 'Times on this page match the host’s current settings. The host can change them at any time.';
+        document.getElementById('live-note').textContent = st.phase === 'play' || st.phase === 'meeting'
+          ? 'Times on this page match this game’s settings. The host can only change them between games.'
+          : 'Times on this page match the host’s current settings. The host can change them before the next game starts.';
       }
 
       const socket = io('/lake');

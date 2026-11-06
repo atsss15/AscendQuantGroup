@@ -11,6 +11,10 @@ const PAGES = { '/lake': 'index.html', '/lake/s/:code': 'index.html', '/lake/tv'
 const IMAGE = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/;
 const MAX_PHOTO_BYTES = 6 * 1024 * 1024;
 const MAX_PHOTOS = 2000;
+const MAX_ALBUM_BYTES = 600 * 1024 * 1024; // the data volume is shared with the rest of the site
+const HEARTBEAT_MS = 5000; // during a game, save at least this often, so a crash restart knows when the game stopped
+const HOST_TRIES = 5; // wrong host passwords per address before a 60 s wait
+const HOST_LOCK_MS = 60_000;
 
 /**
  * Mount Lake Lurkers (the retreat's real-life social-deduction game) on an existing server: phone app at /lake,
@@ -23,7 +27,9 @@ const MAX_PHOTOS = 2000;
 export function attachLake({ app, io }, { isAdminPassword, dir = path.resolve('data', 'lake') }) {
   const file = path.join(dir, 'state.json');
   const photoDir = path.join(dir, 'photos');
-  const store = fs.existsSync(file) ? LakeStore.fromJSON(JSON.parse(fs.readFileSync(file, 'utf8'))) : new LakeStore();
+  const store = load(file);
+  // a restart mid-game (crash, deploy) would otherwise count the downtime against every timer, e.g. run out a storm
+  if (store.pauseAfterRestart()) console.log('[lake] the server restarted during a game, so it is paused until the host resumes');
 
   for (const [route, page] of Object.entries(PAGES)) app.get(route, (req, res) => res.sendFile(path.join(PUBLIC, page)));
   app.use('/lake', express.static(PUBLIC));
@@ -47,7 +53,7 @@ export function attachLake({ app, io }, { isAdminPassword, dir = path.resolve('d
   app.post('/lake/api/photo', express.json({ limit: '8mb' }), (req, res) => {
     const player = store.playerByToken(req.get('authorization')?.replace(/^Bearer /, ''));
     if (!player) return res.status(401).json({ error: 'Please sign in again' });
-    const body = req.body ?? {};
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
     const args = { choreId: body.choreId, code: body.code, partnerId: body.partnerId ?? null };
     let saved = null;
     try {
@@ -55,22 +61,28 @@ export function attachLake({ app, io }, { isAdminPassword, dir = path.resolve('d
       if (!m) throw new LakeError('That photo didn\'t come through. Try again.');
       const bytes = Buffer.from(m[2], 'base64');
       if (bytes.length > MAX_PHOTO_BYTES) throw new LakeError('That photo is too big');
-      if (store.photos.length >= MAX_PHOTOS) throw new LakeError('The photo album is full');
+      const album = store.photos.reduce((sum, ph) => sum + (ph.bytes ?? 0), 0);
+      if (store.photos.length >= MAX_PHOTOS || album + bytes.length > MAX_ALBUM_BYTES) throw new LakeError('The photo album is full');
       store.checkPhoto(player.id, args);
       const id = randomBytes(12).toString('hex');
       fs.mkdirSync(photoDir, { recursive: true });
       saved = path.join(photoDir, id);
       fs.writeFileSync(saved, bytes);
-      res.json({ ok: true, ...store.addPhoto(player.id, args, { id, mime: m[1] }) });
+      res.json({ ok: true, ...store.addPhoto(player.id, args, { id, mime: m[1], bytes: bytes.length }) });
     } catch (err) {
       if (saved) fs.rmSync(saved, { force: true });
       if (err instanceof LakeError) return res.status(400).json({ error: err.message });
       console.error('[lake:photo]', err);
       res.status(500).json({ error: 'Internal server error' });
     }
+  }, (err, req, res, next) => {
+    // body too big or not JSON: answer in JSON like every other error here (the phone shows `error`)
+    if (res.headersSent) return next(err);
+    res.status(err.status ?? 400).json({ error: err.type === 'entity.too.large' ? 'That photo is too big' : 'That photo didn\'t come through. Try again.' });
   });
 
   const nsp = io.of('/lake');
+  const hostFails = new Map(); // address -> { n, until }
 
   // ---- push updates, coalesced
   let flushTimer = null;
@@ -87,33 +99,72 @@ export function attachLake({ app, io }, { isAdminPassword, dir = path.resolve('d
   });
 
   function flush() {
+    clearTimeout(flushTimer);
     flushTimer = null;
     const online = new Set([...nsp.sockets.values()].map((s) => s.data.playerId).filter(Boolean));
     let host = null;
     for (const socket of nsp.sockets.values()) push(socket);
-    for (const socket of nsp.sockets.values()) if (socket.data.isHost) socket.emit('host', (host ??= store.hostView(online)));
+    for (const socket of nsp.sockets.values()) if (socket.data.isHost) pushHost(socket, (host ??= safely('host view', () => store.hostView(online))));
     scheduleSave();
   }
 
-  function push(socket) {
-    socket.emit('state', store.view(socket.data.playerId, socket.data.token ?? socket.data.hostToken));
+  /**
+   * Sends a screen its view, but only when something in it changed. A push to every phone on every change would let
+   * anyone watching their own network traffic see a kill happen (a push that changes nothing they can see).
+   */
+  function push(socket, force = false) {
+    const view = safely('view', () => store.view(socket.data.playerId, socket.data.token ?? socket.data.hostToken));
+    if (!view) return;
+    const { now, ...rest } = view;
+    const key = JSON.stringify(rest);
+    if (!force && key === socket.data.lastState) return;
+    socket.data.lastState = key;
+    socket.emit('state', view);
   }
 
-  const ticker = setInterval(() => store.tick(), 500);
+  function pushHost(socket, view, force = false) {
+    if (!view) return;
+    const key = JSON.stringify(view);
+    if (!force && key === socket.data.lastHost) return;
+    socket.data.lastHost = key;
+    socket.emit('host', view);
+  }
+
+  // a throw inside a timer would take the whole site down (and a saved state that throws would do it on every restart)
+  function safely(what, fn) {
+    try {
+      return fn();
+    } catch (err) {
+      console.error(`[lake:${what}]`, err);
+      return null;
+    }
+  }
+
+  const live = () => store.phase === 'play' || store.phase === 'meeting';
+  const ticker = setInterval(() => {
+    safely('tick', () => store.tick());
+    if (live() && !store.paused && Date.now() - lastSave > HEARTBEAT_MS) scheduleSave();
+  }, 500);
   ticker.unref();
 
   // ---- persistence
   let saveTimer = null;
+  let lastSave = Date.now();
   function scheduleSave() {
     saveTimer ??= setTimeout(save, 1000);
   }
   function save() {
+    clearTimeout(saveTimer);
     saveTimer = null;
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(`${file}.tmp`, JSON.stringify(store));
-    fs.renameSync(`${file}.tmp`, file);
+    lastSave = Date.now();
+    safely('save', () => {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(`${file}.tmp`, JSON.stringify(store));
+      fs.renameSync(`${file}.tmp`, file);
+    });
   }
-  process.on('exit', () => saveTimer && save());
+  const onExit = () => (saveTimer || live()) && save();
+  process.on('exit', onExit);
 
   // ---- protocol
   const hostCommands = {
@@ -151,7 +202,7 @@ export function attachLake({ app, io }, { isAdminPassword, dir = path.resolve('d
     const signIn = (player, t) => {
       socket.data.playerId = player.id;
       socket.data.token = t;
-      push(socket);
+      push(socket, true);
       flush(); // the host's list shows who's online
     };
 
@@ -175,7 +226,11 @@ export function attachLake({ app, io }, { isAdminPassword, dir = path.resolve('d
     });
 
     handle(socket, 'station', ({ code } = {}) => ({ station: store.station(code) }));
-    handle(socket, 'gallery', () => store.gallery(socket.data.token ?? socket.data.hostToken));
+    handle(socket, 'gallery', () => {
+      // who took which photo where and when is for the players, not anyone who opens the page
+      if (!socket.data.playerId && !socket.data.isHost) throw new LakeError('Please sign in');
+      return store.gallery(socket.data.token ?? socket.data.hostToken);
+    });
 
     for (const [event, fn] of Object.entries(actions)) {
       handle(socket, event, (payload) => {
@@ -186,13 +241,25 @@ export function attachLake({ app, io }, { isAdminPassword, dir = path.resolve('d
 
     handle(socket, 'host:login', ({ password, hostToken } = {}) => {
       if (!(hostToken && store.isHostToken(hostToken))) {
-        if (!password || !isAdminPassword(password)) throw new LakeError('Wrong host password');
+        if (!password) throw new LakeError('Wrong host password');
+        // it's the site's admin password: slow down guessing (a stale saved hostToken alone doesn't count)
+        const ip = String(socket.handshake.headers['fly-client-ip'] ?? socket.handshake.address ?? '');
+        const now = Date.now();
+        const fails = hostFails.get(ip);
+        if (fails?.until > now) throw new LakeError(`Too many wrong passwords. Try again in ${Math.ceil((fails.until - now) / 1000)} s`);
+        if (!isAdminPassword(String(password))) {
+          const n = (fails?.n ?? 0) + 1;
+          if (hostFails.size > 1000) hostFails.clear();
+          hostFails.set(ip, n >= HOST_TRIES ? { n: 0, until: now + HOST_LOCK_MS } : { n, until: 0 });
+          throw new LakeError('Wrong host password');
+        }
+        hostFails.delete(ip);
         hostToken = store.addHostToken();
       }
       socket.data.isHost = true;
       socket.data.hostToken = hostToken;
-      push(socket);
-      socket.emit('host', store.hostView(new Set([...nsp.sockets.values()].map((s) => s.data.playerId).filter(Boolean))));
+      push(socket, true);
+      pushHost(socket, store.hostView(new Set([...nsp.sockets.values()].map((s) => s.data.playerId).filter(Boolean))), true);
       return { hostToken };
     });
 
@@ -208,7 +275,28 @@ export function attachLake({ app, io }, { isAdminPassword, dir = path.resolve('d
     });
   });
 
-  return { store, save };
+  /** Stops the timers (for tests); the socket namespace and routes go when the server closes. */
+  function close() {
+    clearInterval(ticker);
+    clearTimeout(flushTimer);
+    if (saveTimer) save();
+    process.off('exit', onExit);
+  }
+
+  return { store, save, close };
+}
+
+/** The saved state, or a fresh store. A file that can't be read is set aside (not lost) so the site still starts. */
+function load(file) {
+  if (!fs.existsSync(file)) return new LakeStore();
+  try {
+    return LakeStore.fromJSON(JSON.parse(fs.readFileSync(file, 'utf8')));
+  } catch (err) {
+    const aside = `${file}.bad-${Date.now()}`;
+    console.error(`[lake] couldn't load ${file}, moved it to ${aside} and started fresh:`, err);
+    fs.renameSync(file, aside);
+    return new LakeStore();
+  }
 }
 
 function handle(socket, event, fn) {

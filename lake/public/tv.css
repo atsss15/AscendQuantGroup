@@ -143,13 +143,13 @@ body[data-phase='meeting'] { background: radial-gradient(ellipse at 50% 120%, rg
 .flash-title { font-size: min(11rem, 12.5vw); font-weight: 900; line-height: 1; text-transform: uppercase; letter-spacing: 0.02em; }
 .flash-sub { font-size: 2.4rem; font-weight: 800; }
 /* alternating colors at ~1.7 flashes a second, under the 3-per-second photosensitivity limit */
-#flash.campfire { animation: flash-campfire 0.6s steps(1) infinite; }
+#flash.fx-campfire { animation: flash-campfire 0.6s steps(1) infinite; }
 @keyframes flash-campfire { 0% { background: #d29922; color: #1a1205; } 50% { background: #b62324; color: #fff; } }
-#flash.storm { animation: flash-storm 0.6s steps(1) infinite; }
+#flash.fx-storm { animation: flash-storm 0.6s steps(1) infinite; }
 @keyframes flash-storm { 0% { background: #f85149; color: #1a0504; } 50% { background: #0d1117; color: #f85149; } }
-#flash.clear { background: rgba(35, 134, 54, 0.95); color: #fff; }
-#flash.begin { background: rgba(13, 17, 23, 0.94); color: var(--accent); }
-#flash.begin .flash-sub { color: var(--text); }
+#flash.fx-clear { background: rgba(35, 134, 54, 0.95); color: #fff; }
+#flash.fx-begin { background: rgba(13, 17, 23, 0.94); color: var(--accent); }
+#flash.fx-begin .flash-sub { color: var(--text); }
 
 .paused-bar { position: fixed; top: 0; left: 0; right: 0; z-index: 70; padding: 1.4vh 2vw; background: var(--amber); color: #1a1205; text-align: center; font-size: 2.2rem; font-weight: 900; }
 .offline-bar { position: fixed; left: 2vw; bottom: 2vh; z-index: 75; padding: 0.4rem 1rem; border-radius: 999px; background: var(--red); color: #1a0504; font-size: 1.2rem; font-weight: 800; }

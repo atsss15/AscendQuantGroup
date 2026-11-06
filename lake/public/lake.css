@@ -313,13 +313,13 @@ body.lake .modal-box { max-height: calc(100vh - 32px); max-height: calc(100dvh -
 
 .flash {
   position: fixed; inset: 0; z-index: 70; display: grid; place-content: center; text-align: center; gap: 12px;
-  padding: 24px; color: #fff; cursor: pointer; background: #9a3412;
+  padding: 24px; color: #fff; cursor: pointer; background: #9a3412; grid-template-columns: minmax(0, 1fr); justify-items: center; overflow-wrap: anywhere;
 }
 .flash.campfire { animation: flash-fire 1s steps(1) infinite; }
 .flash.storm { animation: flash-storm 1s steps(1) infinite; }
 @keyframes flash-fire { 0% { background: #c2410c; } 50% { background: #7c1d06; } }
 @keyframes flash-storm { 0% { background: #b91c1c; } 50% { background: #1e1b4b; } }
-.flash-title { font-size: 58px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.04em; line-height: 1; }
+.flash-title { font-size: min(58px, 13.5vw); font-weight: 900; text-transform: uppercase; letter-spacing: 0.04em; line-height: 1; }
 .flash-line { font-size: 20px; font-weight: 600; max-width: 24em; }
 .flash-hint { font-size: 14px; opacity: 0.8; margin-top: 16px; }
 @media (prefers-reduced-motion: reduce) {

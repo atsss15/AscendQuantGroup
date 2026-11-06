@@ -140,12 +140,25 @@
         h('li', {}, 'Cut along the dashed lines.'),
         h('li', {}, h('b', {}, 'Tape each card at its station at eye level'), ', in the spot written on the card. Put the Join card by the TV.'),
         h('li', {}, 'Test one: point a phone camera at a card. It should open the game.')),
+      addressWarning(),
       off.length ? h('p', { class: 'muted' }, `Switched off, so not printed: ${off.map((st) => st.name).join(', ')}.`) : '',
       host.settings?.storm === false ? h('p', { class: 'muted' }, 'Storms are off, so no card is marked as a storm station.') : '',
       h('div', { class: 'row' },
         h('label', { class: 'row' }, 'Join cards', joins),
         h('span', { class: 'grow' }),
         h('button', { type: 'button', class: 'primary', onclick: printNow }, 'Print')));
+  }
+
+  /** The QR codes encode the address this page was opened on, so printing from this laptop's own address won't work. */
+  function addressWarning() {
+    const host = location.hostname;
+    if (host === 'localhost' || /^127\./.test(host) || host === '[::1]') {
+      return h('p', { class: 'warn-box' }, `These QR codes open ${location.host}, which no phone can reach. Open this page on the game’s public address and print from there.`);
+    }
+    if (host.endsWith('.local') || /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)) {
+      return h('p', { class: 'warn-box' }, `These QR codes open ${location.host}: they only work on the same Wi-Fi, while this computer runs the game.`);
+    }
+    return '';
   }
 
   // ------------------------------------------------------------------ cards

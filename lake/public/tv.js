@@ -171,7 +171,7 @@
   let flashTimer = null;
   function flash(kind, title, sub, ms = 4500) {
     const el = $('#flash');
-    el.className = `flash ${kind}`;
+    el.className = `flash fx-${kind}`; // not plain `storm`: that's the storm takeover's class, whose grid would skew the flash
     el.replaceChildren(h('div', { class: 'flash-title' }, title), sub ? h('div', { class: 'flash-sub' }, sub) : '');
     el.hidden = false;
     clearTimeout(flashTimer);

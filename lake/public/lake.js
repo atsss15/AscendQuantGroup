@@ -52,7 +52,7 @@
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const vibrate = (pattern) => { try { navigator.vibrate?.(pattern); } catch { /* not on iPhone */ } };
   const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
-  const listNames = (names) => (names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`);
+  const listNames = (names) => (names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`);
   const capital = (text) => (text ? text[0].toUpperCase() + text.slice(1) : '');
 
   function shuffle(list) {
@@ -142,9 +142,20 @@
   const socket = io('/lake');
   function call(event, payload = {}) {
     return new Promise((resolve) => {
-      if (!socket.connected) return resolve({ ok: false, offline: true, error: 'Not connected. Trying again…' });
-      socket.timeout(8000).emit(event, payload, (err, res) =>
+      const send = () => socket.timeout(8000).emit(event, payload, (err, res) =>
         resolve(err ? { ok: false, timeout: true, error: 'The game didn’t answer. Try again.' } : res ?? { ok: false, error: 'No answer' }));
+      if (socket.connected) return send();
+      // The phone just woke up or the Wi-Fi blinked: give the connection a moment instead of failing the tap. The
+      // 'connect' handler registered first sends `resume` before this, so the server knows who's asking.
+      const onConnect = () => {
+        clearTimeout(timer);
+        send();
+      };
+      const timer = setTimeout(() => {
+        socket.off('connect', onConnect);
+        resolve({ ok: false, offline: true, error: 'Not connected. Check your Wi-Fi and try again.' });
+      }, 5000);
+      socket.once('connect', onConnect);
     });
   }
 
@@ -159,9 +170,11 @@
     host: null, // last 'host' view (only on a host-logged-in device)
     isHost: false,
     offset: 0, // server clock minus local clock
+    offsetFresh: true, // next state sets the offset outright (new connection)
     frozenAt: null, // server time the game paused at, so countdowns hold still
     ready: false, // the first sign-in attempt of this page load is done
     expectMe: false, // signed in, waiting for a state that knows who we are
+    resuming: false, // (re)connected with a token, `resume` not answered yet
   };
   const ui = {
     view: null, // full-screen sheet: station | puzzle | photo | gallery
@@ -186,7 +199,9 @@
     $('#conn').classList.add('on');
     $('#conn').title = 'Connected';
     $('#offline').hidden = true;
+    store.offsetFresh = true;
     const token = storage.get(KEY_TOKEN);
+    store.resuming = !!token;
     if (token) await resume(token);
     const hostToken = storage.get(KEY_HOST);
     if (hostToken) {
@@ -200,19 +215,23 @@
   socket.on('disconnect', () => {
     $('#conn').classList.remove('on');
     $('#conn').title = 'Disconnected';
+    store.resuming = !!storage.get(KEY_TOKEN);
     offlineTimer = setTimeout(() => { $('#offline').hidden = false; }, 2000);
   });
 
   async function resume(token) {
     const res = await call('resume', { token });
     if (res.ok) {
+      store.resuming = false;
       waitForMe();
       openPending();
     } else if (res.timeout) {
       waitForMe();
       setTimeout(() => socket.connected && resume(token), 1500);
-    } else if (!res.offline) {
-      storage.del(KEY_TOKEN);
+    } else {
+      store.resuming = false;
+      if (!res.offline) storage.del(KEY_TOKEN);
+      render();
     }
     return res.ok;
   }
@@ -237,8 +256,15 @@
   }
 
   socket.on('state', (s) => {
+    // A push that sat in a buffer while the phone slept arrives late, which only ever makes this sample too small, so
+    // keep the largest one per connection.
+    const seen = s.now - Date.now();
+    store.offset = store.offsetFresh ? seen : Math.max(store.offset, seen);
+    store.offsetFresh = false;
+    // Every new connection first gets the signed-out view, then ours once `resume` lands. Showing the signed-out one
+    // would flash the sign-in screen and close the open station, puzzle or photo on every Wi-Fi blip or redeploy.
+    if (store.resuming && !s.me) return;
     const prev = store.state;
-    store.offset = s.now - Date.now();
     if (!s.paused) store.frozenAt = null;
     else if (!prev?.paused || store.frozenAt == null) store.frozenAt = s.pausedAt ?? s.now;
     store.state = s;
@@ -252,6 +278,7 @@
   });
   socket.on('signedOut', ({ reason } = {}) => {
     storage.del(KEY_TOKEN);
+    store.resuming = false;
     closeViews();
     toast(reason || 'You were signed out.', 'error');
     render();
@@ -260,6 +287,7 @@
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
       if (!socket.connected) socket.connect();
+      if (sound.on && sound.ctx && sound.ctx.state !== 'running') sound.ctx.resume().catch(() => {});
       syncWake();
     } else {
       closeRole(); // never leave the role card open in a pocket
@@ -269,12 +297,19 @@
   // ------------------------------------------------------------------ sound, vibration, screen
 
   const sound = { ctx: null, on: storage.get(KEY_SOUND) !== '0' };
+  // iPhones mute web audio with the silent switch unless the page asks for "playback" (Safari 16.4+). Most players
+  // keep their phone on silent, and iPhones can't vibrate from a web page, so without this the Campfire alarm is mute.
+  const audioSession = 'audioSession' in navigator ? navigator.audioSession : null;
+  function syncAudioSession() {
+    try { if (audioSession) audioSession.type = sound.on ? 'playback' : 'auto'; } catch { /* older Safari */ }
+  }
+  syncAudioSession();
 
   /** Browsers only allow audio after a tap; this runs on every tap and re-wakes audio after the phone slept. */
   function unlockAudio() {
     try {
       const AC = window.AudioContext || window.webkitAudioContext;
-      if (!AC) return;
+      if (!AC || !sound.on) return;
       sound.ctx ??= new AC();
       if (sound.ctx.state === 'running') return;
       sound.ctx.resume().catch(() => {});
@@ -306,10 +341,23 @@
     osc.stop(t + dur + 0.05);
   }
 
-  const SFX = {
+  /**
+   * Plays a sound now. If audio was put to sleep (iPhone lock screen, a call), it first tries to wake it, but plays only
+   * if that works right away: an alarm that turns up minutes later on the next tap would just confuse.
+   */
+  const playing = (fn) => (...args) => {
+    const ctx = sound.ctx;
+    if (!sound.on || !ctx) return;
+    if (ctx.state === 'running') return fn(...args);
+    const asked = Date.now();
+    ctx.resume().then(() => { if (Date.now() - asked < 1500 && ctx.state === 'running') fn(...args); }).catch(() => {});
+  };
+
+  const SFX = Object.fromEntries(Object.entries({
     alarm: () => { for (let i = 0; i < 10; i++) tone(i % 2 ? 660 : 880, i * 0.22, 0.2, { type: 'square', vol: 0.3 }); },
     siren: () => { for (let i = 0; i < 3; i++) { tone(480, i, 0.5, { type: 'sawtooth', vol: 0.22, to: 1100 }); tone(1100, i + 0.5, 0.5, { type: 'sawtooth', vol: 0.22, to: 480 }); } },
-    death: () => { tone(440, 0, 1.6, { type: 'triangle', vol: 0.35, to: 70 }); tone(220, 0.1, 1.6, { type: 'sine', vol: 0.25, to: 50 }); },
+    // soft and short on purpose: a loud wail would tell the whole room a kill just happened, next to the Lurker
+    death: () => tone(330, 0, 0.5, { type: 'sine', vol: 0.08, to: 180 }),
     chime: () => { tone(880, 0, 0.4, { vol: 0.3 }); tone(1320, 0.16, 0.6, { vol: 0.3 }); },
     ding: () => { tone(1568, 0, 0.6, { vol: 0.3 }); tone(2093, 0.09, 0.7, { vol: 0.15 }); },
     blip: () => tone(988, 0, 0.12, { vol: 0.2 }),
@@ -317,7 +365,7 @@
     stage: () => { tone(660, 0, 0.16); tone(880, 0.18, 0.22); },
     fanfare: () => [523, 659, 784, 1047].forEach((f, i) => tone(f, i * 0.15, i === 3 ? 0.9 : 0.4, { type: 'triangle', vol: 0.3 })),
     pad: (f) => tone(f, 0, 0.38, { type: 'triangle', vol: 0.3 }),
-  };
+  }).map(([name, fn]) => [name, playing(fn)]));
 
   // Keep the screen on during a game (Screen Wake Lock). The lock drops when the tab hides, so it's re-taken.
   const wake = { lock: null, busy: false };
@@ -383,6 +431,11 @@
     if (s.phase === 'meeting' && prev.phase !== 'meeting') {
       ui.voteFor = null;
       closeRole();
+      // the photo gallery and an enlarged photo would otherwise sit on top of the Campfire screen
+      if (ui.view?.kind === 'gallery') {
+        ui.view = null;
+        if ($('#modal .lightbox')) closeModal();
+      }
       SFX.alarm();
       vibrate([500, 150, 500, 150, 900]);
       flash('campfire', 'Campfire!', `Go to the ${s.campfire?.name ?? 'Campfire'}: ${s.campfire?.where ?? ''}`, s.meeting ? reasonLine(s, s.meeting) : '');
@@ -404,7 +457,7 @@
       if (pyou.status === 'alive' && you.status === 'dead') {
         closeRole();
         SFX.death();
-        vibrate([700, 200, 700]);
+        vibrate(200);
       }
       if (pyou.status === 'dead' && you.status === 'alive') toast('You’re back in the game.');
       for (const c of you.chores) {
@@ -500,7 +553,7 @@
         h('button', { type: 'button', onclick: toggleSound }, sound.on ? '🔊 Sound on' : '🔇 Sound off'),
         inGame && wakeSupported ? h('button', { type: 'button', onclick: toggleWake }, wakeOn() ? '☀️ Screen stays on' : '🌙 Screen can sleep') : ''),
       inGame && !wakeSupported ? h('p', { class: 'small muted' }, 'Tip: set Auto-Lock to Never while you play, so the alarms reach you.') : '',
-      sound.on ? h('p', { class: 'small muted' }, 'Turn your ringer on to hear the Campfire alarm.') : '',
+      sound.on ? h('p', { class: 'small muted' }, audioSession ? 'Turn your volume up so you hear the Campfire alarm.' : 'Turn your ringer on and the volume up to hear the Campfire alarm.') : '',
       h('div', { class: 'row' },
         s?.me ? h('button', { type: 'button', class: 'ghost', onclick: signOut }, 'Sign out') : '',
         h('span', { class: 'grow' }),
@@ -513,9 +566,12 @@
   function toggleSound() {
     sound.on = !sound.on;
     storage.set(KEY_SOUND, sound.on ? '1' : '0');
+    syncAudioSession();
     if (sound.on) {
       unlockAudio();
       setTimeout(SFX.ding, 50);
+    } else {
+      sound.ctx?.suspend().catch(() => {}); // hand the speaker back to music apps
     }
     render();
   }
@@ -683,6 +739,11 @@
     // Shown inside the (private) card, never as a toast someone could glance at.
     role.note = res.ok ? `Done. ${target.name} is down. Walk away calmly.` : res.error;
     renderRole();
+    // then the card shuts by itself, so it isn't left showing "Lurker" next to a body
+    if (res.ok) {
+      clearTimeout(role.idle);
+      role.idle = setTimeout(closeRole, 3000);
+    }
   }
 
   function stormControls(s, you) {
@@ -705,8 +766,10 @@
   async function doStorm(btn) {
     btn.disabled = true;
     const res = await call('storm');
+    // Started: shut the card at once. Every phone is about to flash, and everyone will look at their screen.
+    if (res.ok) return closeRole();
     role.stormAsk = false;
-    role.note = res.ok ? '' : res.error;
+    role.note = res.error;
     renderRole();
   }
 
@@ -981,7 +1044,11 @@
   function buildMeeting() {
     const stage = h('section', { class: 'box stage' });
     const ghost = slot();
-    const act = box();
+    // The buttons and the who's-in list are separate slots, so other players checking in or voting doesn't rebuild
+    // the "I'm here" or vote buttons under someone's finger (a tap across a rebuild is lost).
+    const main = slot('stack');
+    const who = slot();
+    const act = h('section', { class: 'box' }, main, who);
     const top = slot('stack');
     return {
       root: h('div', { class: 'stack' }, stage, ghost, act, top, roleEl, footerEl, hostUI.el),
@@ -992,14 +1059,24 @@
         if (!m) return;
         fill(stage, stageData(m), () => stageBox(s, m));
         fill(ghost, [you.status, you.ejected], () => (you.status === 'ghost' ? ghostBanner(you) : ''));
-        fill(act, [m, you.status, you.myVote, ui.voteFor, s.campfire], () => meetingAct(s, m, you));
+        fill(main, meetingMainData(s, m, you), () => meetingMain(s, m, you));
+        fill(who, [m.stage, m.voters, m.here, m.voted, s.players], () => meetingWho(s, m));
         fill(top, headerData(s), () => gameHeader(s));
         renderRole();
       },
     };
   }
 
-  function meetingAct(s, m, you) {
+  /** What the main part of the Campfire box depends on, per stage. */
+  function meetingMainData(s, m, you) {
+    const alive = you?.status === 'alive';
+    if (m.stage === 'gather') return [m.stage, s.campfire, alive, m.here.includes(s.me.id)];
+    if (m.stage === 'discuss') return [m.stage, m.newlyOut];
+    if (m.stage === 'vote') return [m.stage, m.voters, you?.status, you?.myVote, ui.voteFor, s.players];
+    return [m.stage, m.result, m.endsAt];
+  }
+
+  function meetingMain(s, m, you) {
     const me = s.me.id;
     const alive = you?.status === 'alive';
     if (m.stage === 'gather') {
@@ -1009,7 +1086,6 @@
           ? h('button', { type: 'button', class: 'primary btn-big', onclick: (e) => act('here', {}, e.currentTarget) }, 'I’m here')
           : '',
         alive && m.here.includes(me) ? h('p', { class: 'ok-line' }, '✓ You’re checked in') : '',
-        whoList(s, m.voters, m.here, `${m.here.length} of ${m.voters.length} here`),
       ];
     }
     if (m.stage === 'discuss') {
@@ -1018,11 +1094,17 @@
           ? h('p', { class: 'out-line' }, `💀 ${listNames(m.newlyOut)} ${m.newlyOut.length === 1 ? 'was' : 'were'} killed.`)
           : h('p', { class: 'muted' }, 'Nobody new was killed.'),
         h('p', {}, 'Talk it out. Who’s lurking?'),
-        whoList(s, m.voters, [], `${m.voters.length} still in`),
       ];
     }
     if (m.stage === 'vote') return voteUI(s, m, you);
     return resultUI(s, m);
+  }
+
+  function meetingWho(s, m) {
+    if (m.stage === 'gather') return whoList(s, m.voters, m.here, `${m.here.length} of ${m.voters.length} here`);
+    if (m.stage === 'discuss') return whoList(s, m.voters, [], `${m.voters.length} still in`);
+    if (m.stage === 'vote') return whoList(s, m.voters, m.voted, `${m.voted.length} of ${m.voters.length} voted`);
+    return '';
   }
 
   const whoList = (s, ids, marked, label) => h('div', { class: 'who-list' },
@@ -1032,13 +1114,13 @@
 
   function voteUI(s, m, you) {
     const me = s.me.id;
-    const counter = whoList(s, m.voters, m.voted, `${m.voted.length} of ${m.voters.length} voted`);
-    if (!m.voters.includes(me)) return [h('p', {}, you?.status === 'ghost' ? 'Ghosts don’t vote. Watch quietly.' : 'You’re not voting this time.'), counter];
+    if (!m.voters.includes(me)) return [h('p', {}, you?.status === 'ghost' ? 'Ghosts don’t vote. Watch quietly.' : 'You’re not voting this time.')];
     if (you.myVote) {
-      return [h('p', { class: 'ok-line' }, you.myVote === 'skip' ? '✓ You voted to skip.' : `✓ You voted for ${pname(s, you.myVote)}.`), counter];
+      return [h('p', { class: 'ok-line' }, you.myVote === 'skip' ? '✓ You voted to skip.' : `✓ You voted for ${pname(s, you.myVote)}.`)];
     }
-    if (ui.voteFor) {
+    if (ui.voteFor && (ui.voteFor === 'skip' || m.voters.includes(ui.voteFor))) {
       const label = ui.voteFor === 'skip' ? 'Skip this vote?' : `Vote for ${pname(s, ui.voteFor)}?`;
+      const back = h('button', { type: 'button', class: 'btn-big', onclick: () => { ui.voteFor = null; render(); } }, 'Back');
       return [
         h('p', { class: 'big center' }, label),
         h('p', { class: 'small muted center' }, 'Votes are final.'),
@@ -1047,13 +1129,18 @@
             type: 'button',
             class: 'primary btn-big',
             onclick: async (e) => {
-              const res = await act('vote', { target: ui.voteFor }, e.currentTarget);
-              if (res.ok) ui.voteFor = null;
-              render();
+              // stays disabled once the vote is in: the state saying so lands a moment after the answer
+              const btn = e.currentTarget;
+              btn.disabled = true;
+              back.disabled = true;
+              const res = await call('vote', { target: ui.voteFor });
+              if (res.ok) return;
+              btn.disabled = false;
+              back.disabled = false;
+              toast(res.error, 'error');
             },
           }, 'Yes, vote'),
-          h('button', { type: 'button', class: 'btn-big', onclick: () => { ui.voteFor = null; render(); } }, 'Back')),
-        counter,
+          back),
       ];
     }
     return [
@@ -1062,7 +1149,6 @@
         m.voters.map((id) => h('button', { type: 'button', class: 'vote-btn', onclick: () => { ui.voteFor = id; render(); } },
           pdot(pcolor(s, id)), pname(s, id), id === me ? ' (you)' : '')),
         h('button', { type: 'button', class: 'vote-btn skip', onclick: () => { ui.voteFor = 'skip'; render(); } }, 'Skip')),
-      counter,
     ];
   }
 
@@ -1311,8 +1397,11 @@
   async function carry(c, v, btn) {
     btn.disabled = true;
     const res = await call('choreDone', { choreId: c.id, code: v.code });
-    btn.disabled = false;
-    if (!res.ok) return toast(res.error, 'error');
+    if (!res.ok) {
+      btn.disabled = false;
+      return toast(res.error, 'error');
+    }
+    // the button stays off: the state with the next step replaces it (a double tap would error otherwise)
     if (res.done) toast(`Dropped off ${c.item} ✓`);
     else {
       SFX.blip();
@@ -1587,7 +1676,13 @@
       canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
       canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
       canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-      return canvas.toDataURL('image/jpeg', quality);
+      const data = canvas.toDataURL('image/jpeg', quality);
+      // iPhones cap the memory all canvases may hold and are slow to free it: let go of this one now
+      canvas.width = 0;
+      canvas.height = 0;
+      img.src = '';
+      if (!data.startsWith('data:image/jpeg')) throw new Error('could not encode');
+      return data;
     } finally {
       URL.revokeObjectURL(url);
     }
@@ -1624,7 +1719,7 @@
     const file = h('input', {
       type: 'file',
       accept: 'image/*',
-      capture: 'environment',
+      capture: chore.partner ? 'user' : 'environment', // the partner photos are selfies
       class: 'visually-hidden',
       onchange: async () => {
         const f = file.files?.[0];
@@ -1780,7 +1875,7 @@
     fill(el, [store.isHost], () => h('div', { class: 'pause-box' },
       h('div', { class: 'pause-icon' }, '⏸'),
       h('h1', {}, 'Paused'),
-      h('p', {}, 'The host paused the game. All timers are frozen.'),
+      h('p', {}, 'The game is paused and every timer is frozen. The host will resume it.'),
       store.isHost ? h('div', { class: 'row two' },
         h('button', { type: 'button', class: 'primary btn-big', onclick: (e) => hostCmd('resume', {}, null, e.currentTarget) }, '▶ Resume'),
         h('button', { type: 'button', class: 'btn-big danger', onclick: endGame }, 'End game')) : ''));
