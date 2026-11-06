@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" type="image/png" href="/icon.png">
+  <title>Lake Lurkers · QR cards</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/lake/print.css">
+</head>
+<body class="print-page">
+  <header class="topbar no-print">
+    <div class="brand">
+      <span class="conn" id="conn" title="Disconnected"></span>
+      <span>Lake Lurkers · QR cards</span>
+    </div>
+    <span class="grow"></span>
+    <button id="print" type="button" class="primary" disabled>Print</button>
+  </header>
+  <main id="app" class="print-main"></main>
+  <div id="toasts" class="no-print"></div>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/lake/print.js"></script>
+</body>
+</html>

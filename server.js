@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { createExchangeServer } from './exchange/index.js';
 import { attachRanking } from './ranking/server.js';
 import { attachAlgo } from './algo/server.js';
+import { attachLake } from './lake/server.js';
 import { competition } from './algo/competition.js';
 import { smash } from './games/smash/game.js';
 import { applyPendingRestore, attachRestore } from './deploy/restore.js';
@@ -41,6 +42,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   attachRanking(server, { isAdminPassword: server.isAdminPassword, dataFile: process.env.RANKING_DATA_FILE });
   // algo trading competition at /algo; players use their exchange accounts (data in data/algo/ or ALGO_DATA_DIR)
   attachAlgo(server, { config: competition, dir: process.env.ALGO_DATA_DIR });
+  // retreat game at /lake (data in data/lake/ or LAKE_DATA_DIR)
+  attachLake(server, { isAdminPassword: server.isAdminPassword, dir: process.env.LAKE_DATA_DIR ?? path.join(dataDir, 'lake') });
   attachRestore(server.app, { isAdminPassword: server.isAdminPassword, dataDir });
   server
     .listen()

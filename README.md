@@ -1,12 +1,13 @@
 # AscendQuantGroup
 
-Trading games and tools for Emory Ascend Quant Group. One server runs three apps:
+Trading games and tools for Emory Ascend Quant Group. One server runs four apps:
 
 | App | Link | What it is |
 |---|---|---|
 | **Algo trading competition** | `/algo` | IMC Prosperity-style: players write Python trading bots that trade a simulated market every day |
 | **Ascend Exchange** | `/` and `/admin` | A live order-book exchange for in-person game nights (e.g. trading Smash Bros outcomes) |
 | **Peer ranking** | `/rank` | Strategy-proof peer grading for presentations |
+| **Lake Lurkers** | `/lake` | A real-life social-deduction game for the retreat: phones run chores, kills, Campfires and votes; `/lake/tv` is the big screen, `/lake/print` the station QR cards, `/lake/rules` the rulebook |
 
 It runs 24/7 at **https://ascend-exchange.fly.dev**. Everyone uses that one link, and it's the only copy of the data.
 

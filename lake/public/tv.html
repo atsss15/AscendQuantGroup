@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" type="image/png" href="/icon.png">
+  <title>Lake Lurkers · TV</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/lake/tv.css">
+</head>
+<body class="tv">
+  <main id="screen"></main>
+
+  <!-- full-screen alert that flashes over everything when a Campfire or storm starts -->
+  <div id="flash" hidden></div>
+
+  <div id="paused" class="paused-bar" hidden>Paused · the host will resume soon</div>
+  <div id="offline" class="offline-bar" hidden>Reconnecting…</div>
+  <button id="relogin" type="button" class="relogin" hidden>Host sign-in needed (for photos). Click here.</button>
+  <div id="muted" class="muted-tag" hidden>Sound off · press M</div>
+  <span class="conn" id="conn" title="Disconnected"></span>
+
+  <!-- "Start screen": one click unlocks sound, goes full screen and signs the host in -->
+  <div id="start" class="start">
+    <form id="start-form" class="start-box">
+      <h1>Lake Lurkers</h1>
+      <p class="muted">The big screen for the Great Room. It shows only what everyone can know.</p>
+      <input id="start-pw" type="password" placeholder="Host password" autocomplete="current-password" hidden>
+      <button type="submit" class="primary">Start screen</button>
+      <button id="start-test" type="button">Test sound</button>
+      <p id="start-error" class="error"></p>
+      <p class="muted small-note">Turn the volume up and keep the laptop plugged in. Keys: F full screen, M mute.</p>
+    </form>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/lake/tv.js"></script>
+</body>
+</html>

@@ -1,0 +1,638 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" type="image/png" href="/icon.png">
+  <link rel="apple-touch-icon" href="/icon.png">
+  <title>Lake Lurkers Rules</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    /* Rulebook only: a readable single column on top of the shared dark theme. */
+    body { font-size: 16px; line-height: 1.55; }
+    a { color: var(--accent); }
+    .topbar a.play { margin-left: auto; background: var(--accent); color: #0d1117; font-weight: 600; text-decoration: none; padding: 8px 14px; border-radius: 6px; }
+
+    .rules { max-width: 720px; margin: 0 auto; padding: 16px 16px 48px; display: grid; gap: 16px; }
+    .hero h1 { margin: 6px 0 4px; font-size: 32px; line-height: 1.15; }
+    .lede { margin: 0 0 6px; font-size: 18px; }
+    .toc { display: flex; flex-wrap: wrap; gap: 6px; }
+    .toc a { padding: 6px 12px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--border); color: var(--text); text-decoration: none; font-size: 14px; }
+    .divider { margin: 8px 0 -4px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+
+    /* sections */
+    .sec { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; scroll-margin-top: 64px; }
+    .sec > h2 { margin: 0 0 10px; font-size: 21px; line-height: 1.25; }
+    .sec h3 { margin: 16px 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+    .sec p { margin: 0 0 10px; }
+    .sec ul, .sec ol { margin: 0 0 10px; padding-left: 22px; }
+    .sec li + li { margin-top: 6px; }
+    .sec > :last-child { margin-bottom: 0; }
+    .sec.quick { border-color: var(--accent); }
+    .sec.quick ol li::marker { color: var(--accent); font-weight: 700; }
+    .sec.storm { border-color: var(--amber); }
+    .sec.safety { border-color: var(--red); }
+
+    /* words with meaning */
+    .camper { color: var(--green); font-weight: 700; }
+    .lurker { color: var(--red); font-weight: 700; }
+    .say { color: var(--amber); font-weight: 700; white-space: nowrap; }
+    .ui { white-space: nowrap; font-weight: 600; font-size: 0.92em; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 0 6px; }
+    .code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; background: var(--panel-2); border-radius: 4px; padding: 0 6px; }
+    .site { font-weight: 700; white-space: nowrap; }
+
+    .callout { background: var(--panel-2); border-left: 4px solid var(--accent); border-radius: 8px; padding: 10px 12px; margin: 10px 0; }
+    .callout.red { background: var(--red-bg); border-left-color: var(--red); }
+    .callout.green { background: var(--green-bg); border-left-color: var(--green); }
+    .callout.amber { background: rgba(210, 153, 34, 0.14); border-left-color: var(--amber); }
+    .callout p:last-child, .callout ul:last-child { margin-bottom: 0; }
+
+    .stats { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
+    .stat { background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px; font-size: 14px; color: var(--muted); }
+    .stat b { color: var(--text); }
+
+    .two { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; margin: 0 0 10px; }
+    .side { background: var(--panel-2); border-radius: 10px; border-top: 4px solid var(--border); padding: 12px; }
+    .side.c { border-top-color: var(--green); }
+    .side.l { border-top-color: var(--red); }
+    .sec .side h3 { margin: 0 0 6px; font-size: 17px; text-transform: none; letter-spacing: 0; color: var(--text); }
+    .side ul { margin: 0; }
+
+    /* the house */
+    .stations { list-style: none; display: grid; gap: 4px; }
+    .sec ul.stations { padding: 0; }
+    .sec .stations li { margin: 0; background: var(--panel-2); border-radius: 8px; padding: 6px 12px; }
+    .stations .name { font-weight: 600; }
+    .stations .where { display: block; color: var(--muted); font-size: 14px; }
+    .stations li.off { opacity: 0.5; }
+    .stations li.off .name { text-decoration: line-through; }
+    .stations li.off::after { content: 'Off this game'; font-size: 12px; color: var(--muted); }
+    .tag { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; vertical-align: 2px; }
+    .tag.fire { background: rgba(88, 166, 255, 0.16); color: var(--accent); }
+    .tag.storm { background: rgba(210, 153, 34, 0.18); color: var(--amber); }
+    .oob { list-style: none; display: flex; flex-wrap: wrap; gap: 6px; }
+    .sec ul.oob { padding: 0; }
+    .sec .oob li { margin: 0; background: var(--red-bg); color: #ffb3ad; border-radius: 999px; padding: 4px 12px; font-weight: 600; }
+
+    /* Campfire stages */
+    .stages { list-style: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+    .sec ol.stages { padding: 0; }
+    .sec .stages li { margin: 0; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font-size: 15px; }
+    .stages .stage { display: flex; flex-wrap: wrap; justify-content: space-between; column-gap: 8px; font-weight: 700; font-size: 17px; margin-bottom: 2px; }
+    .stages .stage b, .stages .stage span { white-space: nowrap; }
+    .stages .stage span { color: var(--amber); font-variant-numeric: tabular-nums; }
+
+    /* FAQ */
+    .faq { border-top: 1px solid var(--border); padding: 10px 0; }
+    .faq:last-child { padding-bottom: 0; }
+    .faq summary { cursor: pointer; font-weight: 600; list-style: none; display: flex; gap: 10px; }
+    .faq summary::-webkit-details-marker { display: none; }
+    .faq summary::before { content: '+'; color: var(--accent); font-weight: 700; width: 12px; flex: none; }
+    .faq[open] summary::before { content: '−'; }
+    .faq p { margin: 6px 0 0 22px; color: var(--muted); }
+
+    /* numbers */
+    table.nums { width: 100%; border-collapse: collapse; }
+    table.nums td { padding: 8px 4px; border-top: 1px solid var(--border); vertical-align: top; }
+    table.nums tr:first-child td { border-top: none; }
+    table.nums td.v { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+    .end { text-align: center; color: var(--muted); margin: 8px 0 0; }
+
+    @media print {
+      :root { --bg: #fff; --panel: #fff; --panel-2: #f3f3f3; --border: #bbb; --text: #000; --muted: #444; }
+      .topbar, .toc { display: none; }
+      .sec { break-inside: avoid; }
+      .faq p { display: block; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span>Lake Lurkers</span><span class="muted">Rules</span></div>
+    <a class="play" href="/lake">Open the game</a>
+  </header>
+
+  <main class="rules">
+    <div class="hero">
+      <h1>Lake Lurkers</h1>
+      <p class="lede">A real-life game of chores, secrets and shoulder taps. The Campers keep the lake house running. Hidden among them: <b data-s="lurkers" data-unit="Lurker">2 Lurkers</b>. Find them before they get you.</p>
+      <p class="small muted" id="live-note">Times on this page are the defaults. The host can change them, and the game app always shows the live numbers.</p>
+    </div>
+
+    <nav class="toc" aria-label="Sections">
+      <a href="#quick">60 seconds</a>
+      <a href="#setup">Setup</a>
+      <a href="#house">The house</a>
+      <a href="#chores">Chores</a>
+      <a href="#kills">Kills</a>
+      <a href="#campfire">Campfire</a>
+      <a href="#ghosts">Ghosts</a>
+      <a href="#storm">Storm</a>
+      <a href="#win">Winning</a>
+      <a href="#safety">Safety</a>
+      <a href="#tips">Tips</a>
+      <a href="#faq">FAQ</a>
+      <a href="#numbers">Numbers</a>
+    </nav>
+
+    <!-- ------------------------------------------------------------ the short version -->
+
+    <section class="sec quick" id="quick">
+      <h2>The 60-second version</h2>
+      <ol>
+        <li><b>Sign in</b> at <a class="site" href="/lake">ascend-exchange.fly.dev/lake</a> with your name and a 4-digit PIN. Meet at the <b>Campfire</b>: the Great Room, by the big fireplace.</li>
+        <li><b>Peek at your role</b> (press and hold the role card). Most of you are <span class="camper">Campers</span>. <b data-s="lurkers" data-unit="Lurker">2 Lurkers</b> hide among you, and they know each other.</li>
+        <li><b>Campers</b> scan the QR codes around the house and do their chores. Fill the chore bar or vote out every Lurker to win.</li>
+        <li><b>Lurkers</b> blend in, fake chores, and kill Campers: a tap on the shoulder, then confirm on the phone.</li>
+        <li><b>Tapped?</b> Sit or lie down right there, stay silent, and show your 3-digit body code.</li>
+        <li><b>Found a body?</b> Type its code under <span class="ui">Report a body</span> and shout <span class="say">“Campfire!”</span> Everyone walks to the Great Room.</li>
+        <li><b>At the Campfire</b>, talk for <span data-s="discussSeconds">3 min</span>, then vote on your phone. Most votes (and more than Skip) is out. A tie means nobody.</li>
+        <li><b>Out?</b> You’re a ghost: wear a ghost marker, stay silent, keep doing chores.</li>
+        <li data-hide="stormOff"><b>Storm!</b> When the Lurkers start one, two different players must secure <b data-storm="0">Upstairs Hall</b> and <b data-storm="1">Screened Patio</b> within <span data-s="stormSeconds">90 sec</span>, or the Lurkers win.</li>
+        <li><b>Talk any time.</b> Walk, don’t run. Stay out of the water. Shout <span class="say">“PAUSE”</span> for anything real.</li>
+      </ol>
+    </section>
+
+    <h2 class="divider">The full rules</h2>
+
+    <!-- ------------------------------------------------------------ roles -->
+
+    <section class="sec" id="roles">
+      <h2>The goal and the roles</h2>
+      <div class="stats">
+        <span class="stat">Lurkers: <b data-s="lurkers">2</b><span data-hide="lurkersKnown"> (1 if 6 or fewer play)</span></span>
+        <span class="stat">Chores each: <b data-s="choreTotal">5</b></span>
+      </div>
+      <div class="two">
+        <div class="side c">
+          <h3><span class="camper">Campers</span></h3>
+          <ul>
+            <li>Do your chores around the house.</li>
+            <li>Watch everyone. Remember who was where.</li>
+            <li>Vote out the Lurkers at Campfires.</li>
+          </ul>
+        </div>
+        <div class="side l">
+          <h3><span class="lurker">Lurkers</span></h3>
+          <ul>
+            <li>Act like a Camper. Fake your chores.</li>
+            <li>Kill Campers one by one<span data-hide="stormOff"> and start storms</span>.</li>
+            <li>You see the other Lurker’s name on your role card. Work together.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="callout red">
+        <p><b>Never show your role card to anyone.</b> Say whatever you like, but your screen is never proof. Everyone’s app looks the same, so a glance at someone’s phone gives nothing away.</p>
+      </div>
+    </section>
+
+    <!-- ------------------------------------------------------------ setup -->
+
+    <section class="sec" id="setup">
+      <h2>Getting started</h2>
+      <ol>
+        <li>Open <a class="site" href="/lake">ascend-exchange.fly.dev/lake</a> in your phone’s browser, or scan the Join QR on the TV. Nothing to install.</li>
+        <li>Sign in with your <b>name</b> and a <b>4-digit PIN</b> you’ll remember. The same name and PIN get you back in on any device.</li>
+        <li>Turn your volume up and leave <span class="ui">Keep screen on</span> switched on. Your phone beeps for Campfires, storms and photo requests, but only while the game page is open.</li>
+        <li>Meet at the <b>Campfire</b>: the <b>Great Room, by the big fireplace</b>, where the TV is. The TV shows the chore bar, who’s out, Campfire timers and storms.</li>
+        <li>The host taps <span class="ui">Start</span>. Peek at your role, check your chore list, and spread out. No kills for the first <span data-s="startGrace">60 sec</span>.</li>
+      </ol>
+      <p class="muted">Want to skip a game? Tap <span class="ui">Sit out</span> in the lobby before it starts.</p>
+    </section>
+
+    <!-- ------------------------------------------------------------ the house -->
+
+    <section class="sec" id="house">
+      <h2>The house</h2>
+      <p>Every station has a QR card. Scan it with your phone’s normal camera app. If it won’t scan, type the code printed under it into the <span class="ui">Scan</span> box in the game.</p>
+
+      <h3>Main floor</h3>
+      <ul class="stations">
+        <li data-station="campfire"><span class="name">Campfire</span><span class="tag fire">Meetings + bell</span><span class="where">Great Room, by the big fireplace (main floor, west side)</span></li>
+        <li data-station="sunroom"><span class="name">Sunroom</span><span class="where">Main floor, lake side, off the breakfast nook</span></li>
+        <li data-station="kitchen"><span class="name">Kitchen</span><span class="where">Main floor, the island</span></li>
+        <li data-station="dining"><span class="name">Dining Room</span><span class="where">Main floor, east side</span></li>
+        <li data-station="east-living"><span class="name">East Living Room</span><span class="where">Main floor, east side, by the second fireplace</span></li>
+        <li data-station="foyer"><span class="name">Foyer</span><span class="where">Main floor, inside the front door</span></li>
+        <li data-station="office"><span class="name">Office</span><span class="where">Main floor, next to the foyer</span></li>
+        <li data-station="laundry"><span class="name">Laundry Room</span><span class="where">Main floor, by the garage</span></li>
+      </ul>
+
+      <h3>Upstairs</h3>
+      <ul class="stations">
+        <li data-station="up-west"><span class="name">Upstairs Landing</span><span class="where">Upstairs, top of the Great Room stairs</span></li>
+        <li data-station="up-east"><span class="name">Upstairs Hall</span><span class="tag storm">Storm</span><span class="where">Upstairs, the hallway outside the primary bedroom</span></li>
+      </ul>
+
+      <h3>Basement</h3>
+      <ul class="stations">
+        <li data-station="den"><span class="name">Basement Living Room</span><span class="where">Basement, the big room facing the lake</span></li>
+        <li data-station="media"><span class="name">Media Room</span><span class="where">Basement, by the fireplace</span></li>
+        <li data-station="gym"><span class="name">Gym</span><span class="where">Basement, back corner</span></li>
+        <li data-station="bar"><span class="name">Basement Kitchen</span><span class="where">Basement, next to the gym</span></li>
+        <li data-station="b-office"><span class="name">Basement Office</span><span class="where">Basement, lake side, by the garage</span></li>
+        <li data-station="screened-patio"><span class="name">Screened Patio</span><span class="tag storm">Storm</span><span class="where">Outside the basement living room, lake side</span></li>
+        <li data-station="covered-patio"><span class="name">Covered Patio</span><span class="where">Outside the basement office, lake side</span></li>
+      </ul>
+
+      <h3>Outside</h3>
+      <ul class="stations">
+        <li data-station="dock"><span class="name">Dock</span><span class="where">Down at the water</span></li>
+        <li data-station="shore"><span class="name">Lakeshore</span><span class="where">The lawn by the water</span></li>
+      </ul>
+
+      <h3>Out of bounds</h3>
+      <ul class="oob">
+        <li>Bedrooms</li>
+        <li>Bathrooms</li>
+        <li>The water itself</li>
+        <li>The road</li>
+        <li>Cars</li>
+        <li>Garages</li>
+      </ul>
+      <p>Out of bounds means out of the game: no chores, no kills, no hiding. The Laundry Room and the Basement Office are next to the garages, but the garages themselves are off limits.</p>
+    </section>
+
+    <!-- ------------------------------------------------------------ chores -->
+
+    <section class="sec" id="chores">
+      <h2>Chores</h2>
+      <p>You get <b data-s="taskCount" data-unit="task">3 tasks</b>, <b data-s="photoCount" data-unit="photo">1 photo</b> and <b data-s="carryCount" data-unit="carry">1 carry</b>, at stations all over the house. Your chore list says where to go. Scan the station, then:</p>
+      <ul>
+        <li><b>Task:</b> a quick puzzle on your phone (10 to 30 sec). Hold a button down (let go and it restarts), tap 1 to 10 in order, repeat a color pattern, or match the pairs.</li>
+        <li><b>Photo:</b> take a photo at the station. Some need another living player in the shot. Pick them in the app, and they tap <span class="ui">Yes</span> on their own phone to confirm. Every photo goes into the gallery at the end, so make it a good one.</li>
+        <li><b>Carry:</b> scan the pick-up station to grab the item (it’s imaginary), then walk it over and scan the drop-off station.</li>
+      </ul>
+      <h3>The chore bar</h3>
+      <p>The bar on every phone and on the TV fills as Campers finish chores. When it’s full, the Campers win. Lurkers get chore lists too, but theirs never count, and the app never says whose chores counted.</p>
+      <p data-show="barMeetings" hidden><b>This game the bar only moves at Campfires</b>, so you can’t watch it to catch a fake chore.</p>
+      <p class="muted">No chores during a Campfire or while the game is paused.</p>
+    </section>
+
+    <!-- ------------------------------------------------------------ talking -->
+
+    <section class="sec" id="talk">
+      <h2>Talking</h2>
+      <p><b>Talk any time, anywhere</b>, not just at Campfires. Share what you saw, accuse, team up, bluff. Lurkers are allowed to lie.</p>
+      <p>Two exceptions: <b>bodies and ghosts stay completely silent.</b> And keep it face to face: no texting, calls or group chats about the game while it’s running.</p>
+    </section>
+
+    <!-- ------------------------------------------------------------ kills -->
+
+    <section class="sec" id="kills">
+      <h2>Kills</h2>
+      <h3>For Lurkers</h3>
+      <ol>
+        <li>Give a Camper a light <b>tap on the shoulder</b>.</li>
+        <li><b>Confirm on your phone right away:</b> open your role card, tap <span class="ui">Kill</span>, pick their name.</li>
+      </ol>
+      <ul>
+        <li>Wait <b data-s="killCooldown">2½ min</b> between kills. The Kill button counts down.</li>
+        <li>No kills in the first <span data-s="startGrace">60 sec</span> of a game, or for <span data-s="killAfterMeeting">90 sec</span> after a Campfire.</li>
+        <li>No kills during a Campfire or a pause. Lurkers can’t kill each other, and ghosts can’t kill.</li>
+        <li>Never tap anyone on the stairs or near the water.</li>
+      </ul>
+
+      <h3>If you’re killed</h3>
+      <ul>
+        <li>Your phone shows who got you and a big <b>3-digit body code</b>, like <span class="code">417</span>.</li>
+        <li><b>Sit or lie down right where you are.</b> On the stairs or the dock? Step to a safe spot first.</li>
+        <li><b>Stay silent.</b> No talking, no faces, no pointing. Hold your phone so whoever finds you can read the code.</li>
+        <li>Stay put until a Campfire starts. Then you get up as a ghost.</li>
+      </ul>
+      <div class="callout">
+        <p><b>Nobody tapped you?</b> If your phone says you’re dead but nobody touched you, press <span class="ui">I wasn’t tapped</span> within <b data-s="undoSeconds">20 sec</b> (only before a Campfire starts). You’re alive again. Honor system: only if it’s true.</p>
+        <p>And the other way round: you’re only dead when your phone says so. A tap with no confirm means nothing.</p>
+      </div>
+    </section>
+
+    <!-- ------------------------------------------------------------ bodies + bell -->
+
+    <section class="sec" id="report">
+      <h2>Bodies and the bell</h2>
+      <h3>Found a body?</h3>
+      <ol>
+        <li>Read the 3-digit code on their phone.</li>
+        <li>Type it under <span class="ui">Report a body</span> on your phone.</li>
+        <li>Shout <span class="say">“Campfire!”</span> A locked phone can’t buzz, so your voice is the alarm.</li>
+      </ol>
+      <p>Anyone alive can report a body, Lurkers included. After 5 wrong codes the box locks for 30 sec.</p>
+      <h3>Ring the bell</h3>
+      <p>Want a Campfire without a body? Go to the Campfire, scan its QR, tap <span class="ui">Ring the bell</span>, and shout <span class="say">“Campfire!”</span></p>
+      <ul>
+        <li>Each player can ring it <b data-s="emergencies">once</b> per game.</li>
+        <li>Not during a storm, and not in the first 30 sec after a Campfire.</li>
+        <li>Ghosts can’t ring it.</li>
+      </ul>
+    </section>
+
+    <!-- ------------------------------------------------------------ Campfire -->
+
+    <section class="sec" id="campfire">
+      <h2>Campfire</h2>
+      <p>A report or the bell starts a Campfire for everyone: phones sound an alarm and so does the TV. Stop what you’re doing (chores freeze anyway) and walk to the Great Room.</p>
+      <ol class="stages">
+        <li><div class="stage"><b>1. Gather</b> <span data-s="gatherSeconds">60 sec</span></div>Come to the Great Room and tap <span class="ui">I’m here</span>. Moves on early once everyone’s in.</li>
+        <li><div class="stage"><b>2. Discuss</b> <span data-s="discussSeconds">3 min</span></div>Phones and the TV show who called it, whose body, and everyone who died since the last Campfire. Talk it out.</li>
+        <li><div class="stage"><b>3. Vote</b> <span data-s="voteSeconds">60 sec</span></div>Vote on your phone for a living player, or <b>Skip</b>. One vote, no take-backs. Ends early once everyone has voted.</li>
+        <li><div class="stage"><b>4. Result</b> <span data-s="resultSeconds">12 sec</span></div>The votes appear on every phone and the TV. Then the game goes on.</li>
+      </ol>
+      <h3>Who goes out</h3>
+      <p>The player with the most votes is out, but only if nobody ties them and they got more votes than Skip. Otherwise nobody goes out. Players who don’t vote don’t count.</p>
+      <ul class="muted">
+        <li>Ana 4, Ben 2, Skip 3: <b>Ana is out.</b></li>
+        <li>Ana 3, Ben 3, Skip 1: tie, <b>nobody</b>.</li>
+        <li>Ana 3, Skip 3: not more than Skip, <b>nobody</b>.</li>
+      </ul>
+      <ul>
+        <li data-hide="anonymousVotes"><b>Votes are public:</b> everyone sees who voted for whom.</li>
+        <li data-show="anonymousVotes" hidden><b>Votes are secret this game:</b> you only see the totals.</li>
+        <li data-hide="revealRole"><b>Roles stay hidden:</b> nobody learns whether the player voted out was a Camper or a Lurker.</li>
+        <li data-show="revealRole" hidden><b>Roles are shown this game:</b> everyone learns whether the player voted out was a Camper or a Lurker.</li>
+        <li>Every body is revealed at a Campfire, found or not.</li>
+        <li>Afterwards: no kills for <span data-s="killAfterMeeting">90 sec</span>, no bell for 30 sec, no storm for 60 sec.</li>
+      </ul>
+    </section>
+
+    <!-- ------------------------------------------------------------ ghosts -->
+
+    <section class="sec" id="ghosts">
+      <h2>Ghosts</h2>
+      <p>You become a ghost when a Campfire reveals your body or when you’re voted out.</p>
+      <ul>
+        <li>Put on a <b>ghost marker</b> (a bandana or glow stick from the host) so everyone can tell.</li>
+        <li><b>Stay silent.</b> No talking, texting, pointing or faces. You know things. Keep them to yourself.</li>
+        <li><b>Keep doing chores.</b> A Camper ghost’s chores still fill the bar. Your photo chores no longer need a partner.</li>
+        <li>Ghosts can’t vote, report bodies, ring the bell, secure a storm, or be in someone’s photo.</li>
+        <li>You can watch Campfires. Quietly.</li>
+        <li data-hide="stormOff">A Lurker ghost can still start storms, but can’t kill.</li>
+      </ul>
+    </section>
+
+    <!-- ------------------------------------------------------------ storm -->
+
+    <section class="sec storm" id="storm">
+      <h2>The storm</h2>
+      <p data-show="stormOff" hidden class="callout amber"><b>Storms are switched off this game.</b></p>
+      <p>The Lurkers can start a storm from their phones. Every phone plays a siren and shows a countdown, and the TV turns red. You have <b data-s="stormSeconds">90 sec</b> to secure both storm stations:</p>
+      <ul class="stations">
+        <li><span class="name" data-storm="0">Upstairs Hall</span><span class="where" data-storm-where="0">Upstairs, the hallway outside the primary bedroom</span></li>
+        <li><span class="name" data-storm="1">Screened Patio</span><span class="where" data-storm-where="1">Outside the basement living room, lake side</span></li>
+      </ul>
+      <ul>
+        <li>To secure one, scan its QR and hold <span class="ui">Secure for the storm</span> for 3 sec.</li>
+        <li>It takes <b>two different living players</b>, one at each station. Ghosts can’t help.</li>
+        <li>Both secured: the storm is over. <b>Time runs out: the Lurkers win.</b></li>
+        <li>Reporting a body cancels the storm, because the Campfire starts. You can’t ring the bell during a storm.</li>
+        <li>The first storm can come <span data-s="stormFirst">3 min</span> into a game. After that, at least <span data-s="stormCooldown">4 min</span> after the last storm ends, and 60 sec after a Campfire.</li>
+      </ul>
+      <div class="callout amber"><p>Shout who’s going where. Walk fast, but don’t run.</p></div>
+    </section>
+
+    <!-- ------------------------------------------------------------ winning -->
+
+    <section class="sec" id="win">
+      <h2>How each side wins</h2>
+      <div class="two">
+        <div class="side c">
+          <h3><span class="camper">Campers</span> win when</h3>
+          <ul>
+            <li>every Lurker has been voted out, <b>or</b></li>
+            <li>the chore bar is full.</li>
+          </ul>
+        </div>
+        <div class="side l">
+          <h3><span class="lurker">Lurkers</span> win when</h3>
+          <ul>
+            <li>living Lurkers equal or outnumber living Campers (say, 2 Lurkers and 2 Campers left)<span data-hide="stormOff">, <b>or</b></span></li>
+            <li data-hide="stormOff">a storm runs out of time.</li>
+          </ul>
+        </div>
+      </div>
+      <p>The end screen reveals every role, who killed whom and when, and the game’s photos.</p>
+    </section>
+
+    <!-- ------------------------------------------------------------ safety -->
+
+    <section class="sec safety" id="safety">
+      <h2>Safety</h2>
+      <ul>
+        <li><b>Walk, don’t run.</b> Inside, outside, on the stairs, and especially during a storm.</li>
+        <li><b>Shoulder taps only.</b> A light tap. Never push, grab, tackle or jump-scare anyone. No taps on the stairs or near the water.</li>
+        <li><b>Stay out of the water.</b> On the dock, keep away from the edges and never get on a boat.</li>
+        <li><b>Phone in your hand, not your pocket,</b> near the water. Pockets are how phones end up in the lake.</li>
+        <li><b>No unsafe hiding:</b> no closets, cabinets, under furniture, on roofs, or anywhere you could get stuck or hurt. Don’t lock or block doors.</li>
+        <li><b>Out of bounds stays out:</b> bedrooms, bathrooms, the water, the road, cars, garages.</li>
+      </ul>
+      <div class="callout red">
+        <p><b>Shout <span class="say">“PAUSE”</span> for anything real:</b> someone gets hurt, something spills or breaks, a phone goes in the water, someone’s at the door. Everyone freezes, the host pauses the app (all timers and cooldowns stop), and we pick up again when it’s sorted.</p>
+      </div>
+    </section>
+
+    <!-- ------------------------------------------------------------ tips -->
+
+    <section class="sec" id="tips">
+      <h2>Tips</h2>
+      <h3>Campers</h3>
+      <ul>
+        <li>Move in pairs or small groups. It’s harder to get tapped with witnesses around.</li>
+        <li>Remember who you saw where, and when. Campfires are won with alibis.</li>
+        <li>Watching someone do a chore proves nothing: Lurkers have chore lists too. Same for photos. Being in someone’s photo doesn’t clear them.</li>
+        <li>Save your bell for a real lead. You only get <span data-s="emergencies">once</span>.</li>
+        <li data-hide="stormOff">Storm? Decide in seconds who goes up and who goes down, and say it out loud.</li>
+        <li>Not sure? Vote Skip. Voting out a Camper helps the Lurkers.</li>
+        <li>Ghost? Keep doing chores. The bar still needs you.</li>
+      </ul>
+      <h3>Lurkers</h3>
+      <ul>
+        <li>Check that your Kill button is ready before you tap. A tap you can’t confirm gives you away.</li>
+        <li>Kill where nobody’s looking, then walk off calmly. Or “find” the body and report it yourself.</li>
+        <li>Do your fake chores. Standing at a station is an alibi.</li>
+        <li data-hide="stormOff">A storm sends Campers to opposite ends of the house, alone. You can still kill during a storm, but a reported body ends it.</li>
+        <li>Talk. Accuse, defend, vouch. For your partner, or against them if it saves you.</li>
+        <li>Don’t stick to your partner all game. Two people who always vouch for each other look guilty.</li>
+        <li data-hide="stormOff">Voted out? Ghost Lurkers can still start storms.</li>
+      </ul>
+    </section>
+
+    <!-- ------------------------------------------------------------ FAQ -->
+
+    <section class="sec" id="faq">
+      <h2>FAQ</h2>
+      <details class="faq">
+        <summary>I lost my phone, or got signed out.</summary>
+        <p>Sign in again with the same name and PIN, on any phone. You’re right back where you were. If you borrowed a phone, sign out afterwards.</p>
+      </details>
+      <details class="faq">
+        <summary>The QR code won’t scan.</summary>
+        <p>Type the code printed under it into the Scan box in the game.</p>
+      </details>
+      <details class="faq">
+        <summary>I’m dead and nobody’s finding me.</summary>
+        <p>Stay put and stay silent. The next Campfire reveals every body, found or not. Then you get up as a ghost.</p>
+      </details>
+      <details class="faq">
+        <summary>Someone tapped me, but my phone didn’t change.</summary>
+        <p>You’re alive until your phone says you’re dead. As for whoever tapped you: now you know something.</p>
+      </details>
+      <details class="faq">
+        <summary>My phone says I’m dead, but nobody tapped me.</summary>
+        <p>Press “I wasn’t tapped” within <span data-s="undoSeconds">20 sec</span>. It only works before a Campfire starts.</p>
+      </details>
+      <details class="faq">
+        <summary>Can I show my phone to prove I’m a Camper?</summary>
+        <p>No. Never show your role card. Talk your way out.</p>
+      </details>
+      <details class="faq">
+        <summary>Do I have to come to every Campfire?</summary>
+        <p>Yes, if you’re alive. Drop what you’re doing and walk over. Chores are frozen anyway.</p>
+      </details>
+      <details class="faq">
+        <summary>What if I don’t vote?</summary>
+        <p>Your vote just doesn’t count. Skip is a real option if you’re unsure.</p>
+      </details>
+      <details class="faq">
+        <summary>I typed a body code wrong.</summary>
+        <p>Try again. After 5 wrong codes the box locks for 30 sec.</p>
+      </details>
+      <details class="faq">
+        <summary>My phone didn’t make a sound.</summary>
+        <p>Phones only beep while the game page is open, and a locked iPhone never buzzes. Keep the page open with Keep screen on, turn the volume up, and listen for “Campfire!” and the TV.</p>
+      </details>
+      <details class="faq">
+        <summary>Bathroom or snack break?</summary>
+        <p>Out-of-bounds rooms are safe: no kills, no chores. Keep it short. For anything longer, ask the host to pause.</p>
+      </details>
+      <details class="faq">
+        <summary>Can Lurkers kill each other, or kill a ghost?</summary>
+        <p>No and no.</p>
+      </details>
+      <details class="faq">
+        <summary>I want to sit a game out.</summary>
+        <p>Tap Sit out in the lobby before the game starts.</p>
+      </details>
+      <details class="faq">
+        <summary>Who’s the host?</summary>
+        <p>Whoever signed in as host. They can play too. The host can start, pause and end games, skip ahead in a Campfire, and change settings like timers. The game app always shows the current numbers.</p>
+      </details>
+    </section>
+
+    <!-- ------------------------------------------------------------ numbers -->
+
+    <section class="sec" id="numbers">
+      <h2>All the numbers</h2>
+      <table class="nums">
+        <tr><td>Lurkers<span class="small muted" data-hide="lurkersKnown"> (1 if 6 or fewer play)</span></td><td class="v" data-s="lurkers">2</td></tr>
+        <tr><td>Chores each</td><td class="v"><span data-s="taskCount" data-unit="task">3 tasks</span>, <span data-s="photoCount" data-unit="photo">1 photo</span>, <span data-s="carryCount" data-unit="carry">1 carry</span></td></tr>
+        <tr><td>No kills at the start</td><td class="v" data-s="startGrace">60 sec</td></tr>
+        <tr><td>Time between kills</td><td class="v" data-s="killCooldown">2½ min</td></tr>
+        <tr><td>No kills after a Campfire</td><td class="v" data-s="killAfterMeeting">90 sec</td></tr>
+        <tr><td>“I wasn’t tapped” window</td><td class="v" data-s="undoSeconds">20 sec</td></tr>
+        <tr><td>Bell rings per player</td><td class="v"><span data-s="emergencies">once</span> a game</td></tr>
+        <tr><td>Campfire: gather</td><td class="v" data-s="gatherSeconds">60 sec</td></tr>
+        <tr><td>Campfire: discuss</td><td class="v" data-s="discussSeconds">3 min</td></tr>
+        <tr><td>Campfire: vote</td><td class="v" data-s="voteSeconds">60 sec</td></tr>
+        <tr><td>Campfire: result</td><td class="v" data-s="resultSeconds">12 sec</td></tr>
+        <tr data-hide="stormOff"><td>Storm: time to secure</td><td class="v" data-s="stormSeconds">90 sec</td></tr>
+        <tr data-hide="stormOff"><td>Storm: earliest first one</td><td class="v" data-s="stormFirst">3 min</td></tr>
+        <tr data-hide="stormOff"><td>Storm: gap after the last one</td><td class="v" data-s="stormCooldown">4 min</td></tr>
+        <tr><td>Wrong body codes before a lock</td><td class="v">5 (30 sec lock)</td></tr>
+      </table>
+    </section>
+
+    <p class="end">Have fun, be nice, and don’t fall in the lake. <a href="/lake">Open the game</a></p>
+  </main>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    /* global io */
+    /**
+     * The page reads fine on its own with the default settings written in. When the game server answers, swap in the
+     * host's live settings: numbers ([data-s]), on/off sentences ([data-show] / [data-hide]), switched-off stations
+     * and the two storm stations.
+     */
+    (() => {
+      'use strict';
+      if (typeof io !== 'function') return; // opened without the game server: keep the defaults
+
+      const $$ = (sel) => document.querySelectorAll(sel);
+
+      /** Seconds in the page's own style: 90 → "90 sec", 150 → "2½ min", 180 → "3 min". */
+      function dur(sec) {
+        if (sec <= 90) return `${sec} sec`;
+        const m = Math.floor(sec / 60);
+        const s = sec % 60;
+        if (s === 0) return `${m} min`;
+        if (s === 30) return `${m}½ min`;
+        return `${m} min ${s} sec`;
+      }
+      const plural = (n, unit) => (n === 1 ? unit : unit.endsWith('y') ? `${unit.slice(0, -1)}ies` : `${unit}s`);
+      const COUNTS = new Set(['lurkers', 'taskCount', 'photoCount', 'carryCount', 'choreTotal']);
+
+      function format(key, v, unit) {
+        if (key === 'emergencies') return v === 1 ? 'once' : v === 2 ? 'twice' : `${v} times`;
+        if (COUNTS.has(key)) return unit ? `${v} ${plural(v, unit)}` : String(v);
+        return dur(v);
+      }
+
+      /** Lurkers this game: the fixed setting, or the auto rule once a game has dealt its players. */
+      function lurkerCount(st) {
+        if (st.settings.lurkers > 0) return st.settings.lurkers;
+        if (st.phase === 'lobby') return null;
+        const n = (st.players ?? []).filter((p) => p.inGame).length;
+        return n ? (n <= 6 ? 1 : 2) : null;
+      }
+
+      const stationEl = (id) => document.querySelector(`#house [data-station="${CSS.escape(id)}"]`);
+
+      function apply(st) {
+        const set = st.settings;
+        const values = { ...set, lurkers: lurkerCount(st), choreTotal: set.taskCount + set.photoCount + set.carryCount };
+        for (const el of $$('[data-s]')) {
+          const v = values[el.dataset.s];
+          if (typeof v === 'number' && Number.isFinite(v)) el.textContent = format(el.dataset.s, v, el.dataset.unit);
+        }
+
+        const flags = {
+          anonymousVotes: !!set.anonymousVotes,
+          revealRole: !!set.revealRole,
+          barMeetings: set.barMode === 'meetings',
+          stormOff: set.storm === false,
+          lurkersKnown: values.lurkers != null,
+        };
+        for (const el of $$('[data-show]')) el.hidden = !flags[el.dataset.show];
+        for (const el of $$('[data-hide]')) el.hidden = !!flags[el.dataset.hide];
+
+        // stations the host switched off (state.stations lists only the enabled ones)
+        const enabled = new Set((st.stations ?? []).map((s) => s.id));
+        if (enabled.size) for (const li of $$('#house [data-station]')) li.classList.toggle('off', !enabled.has(li.dataset.station));
+
+        // the storm's two stations: tags in the house list, names wherever the page mentions them
+        if (Array.isArray(set.stormStations)) {
+          for (const tag of $$('#house .tag.storm')) tag.remove();
+          set.stormStations.forEach((id, i) => {
+            const li = stationEl(id);
+            if (!li) return;
+            if (!flags.stormOff) {
+              const tag = document.createElement('span');
+              tag.className = 'tag storm';
+              tag.textContent = 'Storm';
+              li.querySelector('.name').after(tag);
+            }
+            for (const el of $$(`[data-storm="${i}"]`)) el.textContent = li.querySelector('.name').textContent;
+            for (const el of $$(`[data-storm-where="${i}"]`)) el.textContent = li.querySelector('.where').textContent;
+          });
+        }
+
+        document.getElementById('live-note').textContent = 'Times on this page match the host’s current settings. The host can change them at any time.';
+      }
+
+      const socket = io('/lake');
+      socket.on('state', (st) => {
+        if (st?.settings) apply(st);
+      });
+    })();
+  </script>
+</body>
+</html>

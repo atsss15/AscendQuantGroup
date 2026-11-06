@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0d1117">
+  <link rel="icon" type="image/png" href="/icon.png">
+  <link rel="apple-touch-icon" href="/icon.png">
+  <title>Lake Lurkers</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/lake/lake.css">
+</head>
+<body class="lake">
+  <header class="topbar lake-top">
+    <div class="brand">
+      <span class="conn" id="conn" title="Disconnected"></span>
+      <span>Lake Lurkers</span>
+    </div>
+    <div id="who" class="who"></div>
+  </header>
+  <div id="offline" class="offline" hidden>Reconnecting…</div>
+  <main id="app" class="lake-main"></main>
+  <div id="sheet" class="sheet" hidden></div>
+  <div id="confirm" class="modal" hidden></div>
+  <div id="pause" class="pause" hidden></div>
+  <div id="modal" class="modal" hidden></div>
+  <div id="flash" class="flash" hidden></div>
+  <div id="toasts"></div>
+  <noscript><p class="lake-main">Lake Lurkers needs JavaScript. Turn it on and reload.</p></noscript>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/lake/lake.js"></script>
+</body>
+</html>
