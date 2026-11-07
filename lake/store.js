@@ -281,7 +281,7 @@ export class LakeStore extends EventEmitter {
   }
 
   enabled(stationId) {
-    return STATION.has(stationId) && !this.settings.disabled.includes(stationId);
+    return STATION.has(stationId) && !STATION.get(stationId).retired && !this.settings.disabled.includes(stationId);
   }
 
   // ---- starting and ending
@@ -1208,7 +1208,7 @@ export class LakeStore extends EventEmitter {
       phase: this.phase,
       gameNo: this.gameNo,
       paused: this.paused,
-      stations: STATIONS.map(({ id, name, floor, where }) => ({ id, name, floor, where, code: this.codes[id], enabled: this.enabled(id) })),
+      stations: STATIONS.filter((st) => !st.retired).map(({ id, name, floor, where }) => ({ id, name, floor, where, code: this.codes[id], enabled: this.enabled(id) })),
       players: [...this.players.values()].map((p) => ({ id: p.id, name: p.name, color: p.color, online: online.has(p.id), sitOut: p.sitOut, inGame: !!(live && this.game.players[p.id]) })),
       canStart: !this.startProblem(),
       startProblem: this.startProblem(),

@@ -12,7 +12,10 @@
  *   talk   anywhere: ask `need` different players a question; each one confirms on their phone
  */
 
-/** `map` places a station on a floor plan in lake/public/maps/<floor>.jpg, in % of the image (none for outside and games). */
+/**
+ * `map` places a station on a floor plan in lake/public/maps/<floor>.jpg, in % of the image (none for outside and games).
+ * `retired` stations are never used (the main-floor office is a bedroom); they stay listed so saved games still load.
+ */
 export const STATIONS = [
   { id: 'campfire', floor: 'Main', name: 'Campfire', where: 'Great Room, by the big fireplace (main floor, west side)', map: { floor: 'main', x: 16.6, y: 22.5 } },
   { id: 'sunroom', floor: 'Main', name: 'Sunroom', where: 'Main floor, lake side, off the breakfast nook', map: { floor: 'main', x: 41.9, y: 15.7 } },
@@ -20,7 +23,7 @@ export const STATIONS = [
   { id: 'dining', floor: 'Main', name: 'Dining Room', where: 'Main floor, east side', map: { floor: 'main', x: 85.4, y: 39.2 } },
   { id: 'east-living', floor: 'Main', name: 'East Living Room', where: 'Main floor, east side, by the second fireplace', map: { floor: 'main', x: 85.4, y: 66.7 } },
   { id: 'foyer', floor: 'Main', name: 'Foyer', where: 'Main floor, inside the front door', map: { floor: 'main', x: 63.0, y: 74.5 } },
-  { id: 'office', floor: 'Main', name: 'Office', where: 'Main floor, next to the foyer', map: { floor: 'main', x: 42.3, y: 68.6 } },
+  { id: 'office', floor: 'Main', name: 'Office', where: 'Main floor, next to the foyer', map: { floor: 'main', x: 42.3, y: 68.6 }, retired: true },
   { id: 'laundry', floor: 'Main', name: 'Laundry Room', where: 'Main floor, by the garage', map: { floor: 'main', x: 25.3, y: 41.2 } },
   { id: 'up-west', floor: 'Upstairs', name: 'Upstairs Landing', where: 'Upstairs, top of the Great Room stairs', map: { floor: 'upstairs', x: 24.0, y: 35.3 } },
   { id: 'up-east', floor: 'Upstairs', name: 'Upstairs Hall', where: 'Upstairs, the hallway outside the primary bedroom', map: { floor: 'upstairs', x: 70.5, y: 48.5 } },
@@ -72,7 +75,7 @@ export const CHORES = [
   { id: 'table', kind: 'act', station: 'dining', title: 'Cup pyramid', detail: 'Stack 6 cups into a 3-2-1 pyramid on the dining table, then put them back.', seconds: 30, max: 2 },
   { id: 'radio', kind: 'act', station: 'east-living', title: 'Do an impression', detail: 'Do your best impression of someone in the club, out loud, for the whole timer.', seconds: 20, voice: true, max: 2 },
   { id: 'lock', kind: 'act', station: 'foyer', title: '20 jumping jacks', detail: 'Do 20 jumping jacks in the foyer.', seconds: 20, max: 2 },
-  { id: 'router', kind: 'act', station: 'office', title: 'Leave a compliment', detail: 'Write a compliment for another player on paper (signed or anonymous) and leave it on the office desk.', seconds: 30, max: 2 },
+  { id: 'router', kind: 'act', station: 'b-office', title: 'Leave a compliment', detail: 'Write a compliment for another player on paper (signed or anonymous) and leave it on the office desk.', seconds: 30, max: 2 },
   { id: 'fold', kind: 'act', station: 'laundry', title: 'Fold 3 towels', detail: 'Neatly fold 3 towels or shirts.', seconds: 30, max: 2 },
   { id: 'frames', kind: 'act', station: 'up-west', title: '15 squats', detail: 'Do 15 squats on the landing.', seconds: 20, max: 2 },
   { id: 'bulb', kind: 'act', station: 'up-east', title: 'Plank', detail: 'Hold a plank until the timer runs out.', seconds: 30, max: 2 },

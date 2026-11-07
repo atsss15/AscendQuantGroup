@@ -558,7 +558,7 @@
         // the time's-up pill sits on the reason line, so the panels below keep their height
         o.reason ? h('p', {},
           /time ran out/i.test(o.reason) ? h('span', { class: 'timeup' }, '⏱ Time’s up!') : '',
-          sentence(String(o.reason)), s.bar?.total ? ` Chores done: ${s.bar.done} of ${s.bar.total}.` : '') : ''),
+          sentence(String(o.reason)), s.bar?.total ? [' ', h('span', { class: 'nowrap' }, `Chores done: ${s.bar.done} of ${s.bar.total}.`)] : '') : ''),
       h('div', { class: `over-body ${photos.length ? '' : 'no-photos'}` },
         h('section', { class: 'panel-tv' },
           h('h2', {}, 'Who was who'),

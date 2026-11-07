@@ -163,6 +163,7 @@ body[data-phase='meeting'] { background: radial-gradient(ellipse at 50% 120%, rg
 .winner { text-align: center; }
 .winner h1 { margin: 0; font-size: 4.6rem; font-weight: 900; line-height: 1; }
 .winner p { margin: 1vh 0 0; font-size: 1.5rem; color: var(--muted); }
+.winner .nowrap { white-space: nowrap; } /* the chore count wraps as one piece */
 .winner.campers h1 { color: var(--green); }
 .winner.lurkers h1 { color: var(--red); }
 .winner .timeup {
