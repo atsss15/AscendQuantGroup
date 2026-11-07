@@ -1137,7 +1137,7 @@
 
   const ICONS = { task: '🎮', photo: '📷', carry: '📦', talk: '💬' };
   const GAME_ICONS = { hold: '✋', wordle: '🔤', make24: '🧮', snake: '🐍', blackjack: '🃏', tap50: '🔢', crack: '🔐', order: '🔢', simon: '🎵', match: '🧩' };
-  // activities by station (one activity per station, except the radio's two, which both get the mic)
+  // activities by station (the radio's two both get the mic; the Basement Office's compliment has its own, below)
   const ACT_ICONS = {
     radio: '🎤', campfire: '💃', pingpong: '🏓', curling: '🥌', golf: '⛳',
     sunroom: '🧘', kitchen: '🧽', dining: '🥤', 'east-living': '🎭', foyer: '🤸', office: '✍️', laundry: '🧺',
@@ -1147,7 +1147,7 @@
   /** Activities you keep trying until you pull it off: their button says "I did it!" instead of "Done". */
   const SKILL_STATIONS = new Set(['pingpong', 'curling', 'golf']);
   function choreIcon(c) {
-    if (c.kind === 'act') return ACT_ICONS[c.stationId] ?? (c.voice ? '🎤' : '🎯');
+    if (c.kind === 'act') return (c.title === 'Leave a compliment' ? '✍️' : ACT_ICONS[c.stationId]) ?? (c.voice ? '🎤' : '🎯');
     if (c.kind === 'task') return GAME_ICONS[c.puzzle] ?? ICONS.task;
     return ICONS[c.kind] ?? '•';
   }

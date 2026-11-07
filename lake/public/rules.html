@@ -249,7 +249,6 @@
         <li data-station="dining"><span class="name">Dining Room</span><span class="where">Main floor, east side</span></li>
         <li data-station="east-living"><span class="name">East Living Room</span><span class="where">Main floor, east side, by the second fireplace</span></li>
         <li data-station="foyer"><span class="name">Foyer</span><span class="where">Main floor, inside the front door</span></li>
-        <li data-station="office"><span class="name">Office</span><span class="where">Main floor, next to the foyer</span></li>
         <li data-station="laundry"><span class="name">Laundry Room</span><span class="where">Main floor, by the garage</span></li>
       </ul>
 
@@ -276,7 +275,7 @@
       <h3>Outside <span class="tag map">not on the floor plans</span></h3>
       <ul class="stations">
         <li data-station="dock"><span class="name">Dock</span><span class="where">Down at the water</span></li>
-        <li data-station="shore"><span class="name">Lakeshore</span><span class="where">The lawn by the water</span></li>
+        <li data-station="shore"><span class="name">Swimming Pool</span><span class="where">By the swimming pool</span></li>
       </ul>
 
       <h3>The radio <span class="tag map">not on the floor plans</span></h3>
@@ -286,9 +285,9 @@
 
       <h3>Out of bounds</h3>
       <ul class="oob">
-        <li>Bedrooms</li>
+        <li>Bedrooms (the room next to the foyer is one too)</li>
         <li>Bathrooms</li>
-        <li>The water itself</li>
+        <li>The water itself: the lake and the swimming pool</li>
         <li>The road</li>
         <li>Cars</li>
         <li>Garages</li>
@@ -314,7 +313,7 @@
         <li>a plain dot: nothing for you there. 🔥 is the Campfire.</li>
       </ul>
       <p>A room with chores this game also shows how many of them are done, like <b>1/3</b>: that count is the same on every phone. Rooms with no chores this game are faded.</p>
-      <p>Tap a marker to see its name and where it is. The Dock, the Lakeshore and the Radio aren’t on the floor plans: they’re under the <span class="ui">Outside</span> tab. Your markers only show your own chores, never anyone else’s.</p>
+      <p>Tap a marker to see its name and where it is. The Dock, the Swimming Pool and the Radio aren’t on the floor plans: they’re under the <span class="ui">Outside</span> tab. Your markers only show your own chores, never anyone else’s.</p>
     </section>
 
     <!-- ------------------------------------------------------------ chores -->
@@ -379,7 +378,6 @@
           <li data-needs="dining"><span class="name">Cup pyramid</span><span class="tag time">30 sec</span><span class="where"><b>Dining Room:</b> stack 6 cups 3-2-1 on the table, then put them back.</span></li>
           <li data-needs="east-living"><span class="name">Do an impression</span><span class="tag time">20 sec</span><span class="tag voice">Out loud</span><span class="where"><b>East Living Room:</b> your best impression of someone in the club.</span></li>
           <li data-needs="foyer"><span class="name">20 jumping jacks</span><span class="tag time">20 sec</span><span class="where"><b>Foyer.</b></span></li>
-          <li data-needs="office"><span class="name">Leave a compliment</span><span class="tag time">30 sec</span><span class="where"><b>Office:</b> write one for another player on paper and leave it on the desk.</span></li>
           <li data-needs="laundry"><span class="name">Fold 3 towels</span><span class="tag time">30 sec</span><span class="where"><b>Laundry Room:</b> neatly, towels or shirts.</span></li>
         </ul>
 
@@ -395,6 +393,7 @@
           <li data-needs="media"><span class="name">Movie scene</span><span class="tag time">20 sec</span><span class="tag voice">Out loud</span><span class="where"><b>Media Room:</b> act out a famous scene. An audience is a bonus.</span></li>
           <li data-needs="gym"><span class="name">10 push-ups</span><span class="tag time">20 sec</span><span class="where"><b>Gym:</b> knees are fine.</span></li>
           <li data-needs="bar"><span class="name">Serve a drink</span><span class="tag time">20 sec</span><span class="where"><b>Basement Kitchen:</b> pour a glass of water (or a drink) and hand it to another player.</span></li>
+          <li data-needs="b-office"><span class="name">Leave a compliment</span><span class="tag time">30 sec</span><span class="where"><b>Basement Office:</b> write one for another player on paper and leave it on the desk.</span></li>
           <li data-needs="b-office"><span class="name">Quick portrait</span><span class="tag time">60 sec</span><span class="where"><b>Basement Office:</b> draw another player on paper and give it to them.</span></li>
           <li data-needs="screened-patio"><span class="name">Wall sit</span><span class="tag time">30 sec</span><span class="where"><b>Screened Patio:</b> hold it until the timer runs out.</span></li>
           <li data-needs="covered-patio"><span class="name">Flamingo</span><span class="tag time">15 sec</span><span class="where"><b>Covered Patio:</b> one foot, eyes closed. Touch down and you start over.</span></li>
@@ -406,7 +405,7 @@
         <h4>Outside</h4>
         <ul class="stations acts">
           <li data-needs="dock"><span class="name">Count the boats</span><span class="tag time">20 sec</span><span class="where"><b>Dock:</b> count the boats on the lake, then tell the next player you meet.</span></li>
-          <li data-needs="shore"><span class="name">Skip a stone</span><span class="tag time">20 sec+</span><span class="where"><b>Lakeshore:</b> from the shore, until one skips.</span></li>
+          <li data-needs="shore"><span class="name">Test the water</span><span class="tag time">15 sec+</span><span class="where"><b>Swimming Pool:</b> dip your hand in (stay out of the pool), then tell the next player you meet how cold it is.</span></li>
         </ul>
 
         <h4>Radio</h4>
@@ -435,7 +434,7 @@
         <p>Scan the station, tap the photo chore, then <span class="ui">📷 Open the camera</span>, take the shot, and tap <span class="ui">Send photo</span>. Photos marked <span class="tag pair inline">With a player</span> need another living player in the shot: pick them under “Who’s in it with you?”, and they tap <span class="ui">Yes</span> on their own phone. It only counts once they do. If they say No, take it again. No answer? Go back to the station and tap <span class="ui">Retake with someone else</span>.</p>
         <ul class="stations acts">
           <li data-needs="dock"><span class="name">Dock selfie</span><span class="tag pair">With a player</span><span class="where"><b>Dock:</b> a selfie together on the dock.</span></li>
-          <li data-needs="shore"><span class="name">Lake shot</span><span class="where"><b>Lakeshore:</b> your best photo of the lake.</span></li>
+          <li data-needs="shore"><span class="name">Pool shot</span><span class="where"><b>Swimming Pool:</b> your best photo of the pool.</span></li>
           <li data-needs="sunroom"><span class="name">Sunroom view</span><span class="where"><b>Sunroom:</b> the view from the sunroom.</span></li>
           <li data-needs="screened-patio"><span class="name">Patio selfie</span><span class="tag pair">With a player</span><span class="where"><b>Screened Patio:</b> a selfie together on the patio.</span></li>
           <li data-needs="east-living"><span class="name">Family portrait</span><span class="tag pair">With a player</span><span class="where"><b>East Living Room:</b> a posed “family portrait” by the fireplace.</span></li>
