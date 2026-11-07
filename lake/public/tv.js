@@ -1,6 +1,7 @@
 /* global io */
 /**
- * Lake Lurkers big screen at /lake/tv: lobby join QR, chore bar, storms, Campfires and the end screen.
+ * Lake Lurkers big screen at /lake/tv: lobby join QR, chore bar with the game's countdown, the rooms with chores,
+ * storms, Campfires and the end screen.
  * It never signs in as a player, so the server only sends it the public state (me/you are null).
  */
 (() => {
@@ -323,8 +324,46 @@
   }
 
 
-  function countdown(endsAt, cls = 'huge') {
-    return h('div', { class: `count ${cls}`, 'data-ends': endsAt }, clock(remaining(endsAt)));
+  function countdown(endsAt, cls = 'huge', low = null) {
+    return h('div', { class: `count ${cls}`, 'data-ends': endsAt, 'data-low': low }, clock(remaining(endsAt)));
+  }
+
+  const LOW_MS = 5 * 60_000; // the game's countdown turns red under 5 minutes
+  const FLOOR_RANK = { Main: 0, Upstairs: 1, Basement: 2, Outside: 3, Games: 4 };
+  const DENSE_ROOMS = 15; // more rooms than this get smaller tiles, and the hints under them make way
+
+  /** The Campers' countdown next to the chore bar (it only runs during play; null without a time limit). */
+  function gameClock(s) {
+    const c = s.clock;
+    if (!c) return '';
+    if (c.endsAt == null) {
+      const left = c.left ?? 0;
+      return h('div', { class: 'game-clock stopped' },
+        h('div', { class: 'clock-label' }, 'Clock stopped'),
+        h('div', { class: `count big ${left < LOW_MS ? 'urgent' : ''}` }, clock(left)));
+    }
+    return h('div', { class: 'game-clock' },
+      h('div', { class: 'clock-label' }, 'Time left'),
+      countdown(c.endsAt, 'big', LOW_MS));
+  }
+
+  /** "⏱ Clock stopped · 23:41 left" while a Campfire has the countdown stopped. */
+  const stoppedLine = (s) => (s.clock && s.clock.endsAt == null
+    ? h('p', { class: `clock-stopped ${(s.clock.left ?? 0) < LOW_MS ? 'urgent' : ''}` }, '⏱ Clock stopped · ', h('b', {}, clock(s.clock.left ?? 0)), ' left')
+    : '');
+
+  /** This game's rooms with chores, with how many of the Campers' chores in each are done. */
+  function roomGrid(s) {
+    const rooms = [...(s.rooms ?? [])].sort((a, b) => (FLOOR_RANK[a.floor] ?? 9) - (FLOOR_RANK[b.floor] ?? 9) || a.name.localeCompare(b.name));
+    if (!rooms.length) return '';
+    const ok = (r) => r.total > 0 && r.done >= r.total;
+    const finished = rooms.filter(ok).length;
+    return h('section', { class: `rooms-tv ${rooms.length > DENSE_ROOMS ? 'dense' : ''}` },
+      h('div', { class: 'rooms-h' }, h('span', {}, 'Rooms with chores'), h('span', { class: 'muted' }, `${finished} of ${rooms.length} finished`)),
+      h('div', { class: 'room-grid' }, rooms.map((r) => h('div', {
+        class: `room-tile ${ok(r) ? 'ok' : ''}`,
+        style: `--p:${r.total ? r.done / r.total : 0}`,
+      }, h('span', { class: 'rt-name' }, r.name), h('b', { class: 'rt-n' }, ok(r) ? `✓ ${r.done}/${r.total}` : `${r.done}/${r.total}`)))));
   }
 
   // ---- lobby: join QR + who's in
@@ -345,11 +384,22 @@
           ? h('div', { class: 'chips' }, players.map((p) => playerChip(p, p.sitOut ? 'dim' : '')))
           : h('p', { class: 'lead' }, 'Nobody yet. Be the first!'),
         players.some((p) => p.sitOut) ? h('p', { class: 'note' }, 'Faded names are sitting out this game.') : '',
+        lobbyRules(s),
         h('p', { class: 'note' }, 'Pick a name and a 4-digit PIN. Same name + PIN gets you back in on any device.'),
         h('p', { class: 'note' }, 'Rules: ', h('b', {}, `${location.host}/lake/rules`))));
   }
 
-  // ---- play: chore bar + players (or the storm takeover)
+  function lobbyRules(s) {
+    const st = s.settings;
+    if (!st) return '';
+    const rooms = Math.min(st.rooms ?? 12, s.stations?.length ?? Infinity);
+    const per = st.choresPerRoom ?? 3;
+    return h('p', { class: 'note setup' },
+      h('b', {}, `${rooms} rooms × ${per} chores`), ', new rooms every game',
+      st.timeLimit ? [' · ', h('b', {}, `⏱ ${st.timeLimit} minute${st.timeLimit === 1 ? '' : 's'}`), ' to finish them'] : ' · no time limit');
+  }
+
+  // ---- play: chore bar + countdown, the rooms, players (or the storm takeover)
 
   let lastPct = 0;
   function playView(s) {
@@ -361,22 +411,31 @@
     const fill = h('div', { class: 'bar-fill', style: `width:${lastPct}%` });
     requestAnimationFrame(() => { fill.style.width = `${pct}%`; });
     lastPct = pct;
-    return h('div', { class: 'play' },
+    const withRooms = !!s.rooms?.length;
+    const many = (s.rooms?.length ?? 0) > DENSE_ROOMS;
+    return h('div', { class: `play ${withRooms ? 'with-rooms' : ''} ${many ? 'many-rooms' : ''}` },
       h('header', { class: 'tv-head' },
         h('b', {}, `Game ${s.gameNo}`),
         h('span', { class: 'grow' }),
         h('span', {}, `${inGame.length} players`)),
-      h('section', { class: 'chores' },
-        h('div', { class: 'chores-label' }, h('span', {}, 'Chores done'), h('b', {}, `${pct}%`)),
-        h('div', { class: 'bar' }, fill),
-        h('div', { class: 'chores-sub' },
-          `${bar.done} of ${bar.total} · Campers win when the bar is full`,
-          s.settings?.barMode === 'meetings' ? ' · it updates at each Campfire' : '')),
+      h('section', { class: `chores-row ${s.clock ? 'has-clock' : ''}` },
+        h('div', { class: 'chores' },
+          h('div', { class: 'chores-label' },
+            // with the rooms on screen too, the count moves up here and the line under the bar goes (space)
+            h('span', {}, 'Chores done', withRooms ? h('small', { class: 'chores-of' }, `${bar.done} of ${bar.total}`) : ''),
+            h('b', {}, `${pct}%`)),
+          h('div', { class: 'bar' }, fill),
+          withRooms && s.settings?.barMode !== 'meetings' ? '' : h('div', { class: 'chores-sub' },
+            withRooms ? '' : `${bar.done} of ${bar.total} · Campers win when the bar is full`,
+            s.settings?.barMode === 'meetings' ? `${withRooms ? 'The bar' : ' · it'} updates at each Campfire` : '')),
+        gameClock(s)),
+      roomGrid(s),
       h('section', { class: 'roster' },
         h('div', { class: 'chips big' }, inGame.map((p) => playerChip(p, p.out ? 'out' : '')))),
       h('footer', { class: 'hints' },
         h('span', {}, 'Found a body? Type its code on your phone.'),
-        h('span', {}, `Ring the bell at the Campfire: ${s.campfire?.where ?? ''}`)));
+        // with the rooms on screen the hints keep to one line: just the room part of the Campfire's place
+        h('span', {}, `Ring the bell at the Campfire: ${(s.rooms?.length ? s.campfire?.where?.split(',')[0] : s.campfire?.where) ?? ''}`)));
   }
 
   function stormView(s) {
@@ -390,7 +449,8 @@
           h('div', { class: 'st-name' }, x.name),
           h('div', { class: 'st-where' }, x.where),
           h('div', { class: 'st-state' }, x.secured ? '✓ Secured' : 'Not secured yet')))),
-      h('p', { class: 'storm-foot' }, 'Scan the station and hold. It takes two different players. Ghosts can’t help.'));
+      h('p', { class: 'storm-foot' }, 'Scan the station and hold. It takes two different players. Ghosts can’t help.',
+        s.clock?.endsAt ? h('span', { class: 'storm-clock' }, '⏱ ', h('span', { 'data-ends': s.clock.endsAt, 'data-low': LOW_MS }, clock(remaining(s.clock.endsAt))), ' left on the clock') : ''));
   }
 
   // ---- meeting: stage, countdown, who's here / who voted, result
@@ -442,7 +502,8 @@
           m.stage !== 'result' ? newlyOut : ''),
         h('div', { class: 'meeting-clock' },
           m.stage === 'result' ? h('div', { class: 'clock-label' }, 'Back to chores in') : '',
-          countdown(m.endsAt, m.stage === 'result' ? 'mid' : 'huge'))),
+          countdown(m.endsAt, m.stage === 'result' ? 'mid' : 'huge'),
+          stoppedLine(s))),
       h('div', { class: 'meeting-body' }, body));
   }
 
@@ -494,7 +555,10 @@
     return h('div', { class: 'over' },
       h('header', { class: `winner ${o.winner ?? 'none'}` },
         h('h1', {}, title),
-        o.reason ? h('p', {}, sentence(String(o.reason))) : ''),
+        // the time's-up pill sits on the reason line, so the panels below keep their height
+        o.reason ? h('p', {},
+          /time ran out/i.test(o.reason) ? h('span', { class: 'timeup' }, '⏱ Time’s up!') : '',
+          sentence(String(o.reason)), s.bar?.total ? ` Chores done: ${s.bar.done} of ${s.bar.total}.` : '') : ''),
       h('div', { class: `over-body ${photos.length ? '' : 'no-photos'}` },
         h('section', { class: 'panel-tv' },
           h('h2', {}, 'Who was who'),
@@ -579,7 +643,7 @@
     for (const el of document.querySelectorAll('[data-ends]')) {
       const ms = remaining(Number(el.dataset.ends));
       el.textContent = clock(ms);
-      el.classList.toggle('urgent', ms <= 10_000);
+      el.classList.toggle('urgent', el.dataset.low ? ms < Number(el.dataset.low) : ms <= 10_000);
     }
     // beep through the last ten seconds of a storm
     const s = store.state;

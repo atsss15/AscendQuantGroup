@@ -70,8 +70,8 @@ a.btn-link {
 .inline-form button { min-width: 92px; min-height: 50px; font-size: 17px; font-weight: 700; border-radius: 10px; }
 input.code { text-transform: uppercase; letter-spacing: 0.18em; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; }
 input.code::placeholder { letter-spacing: 0.1em; font-weight: 400; text-transform: none; }
-input.pin { -webkit-text-security: disc; letter-spacing: 0.3em; }
-input.pin:placeholder-shown { letter-spacing: normal; }
+input.pin-input { -webkit-text-security: disc; letter-spacing: 0.3em; }
+input.pin-input:placeholder-shown { letter-spacing: normal; }
 
 .switch-row { display: flex; gap: 12px; align-items: center; cursor: pointer; }
 .switch-row input { width: 24px; height: 24px; accent-color: var(--accent); flex: none; margin: 0; }
@@ -105,6 +105,18 @@ input.pin:placeholder-shown { letter-spacing: normal; }
 /* ---------- play: header, storm, banners */
 
 .bar { height: 16px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
+
+/* the game's countdown: everyone sees it; red under 5 minutes; dashed while a Campfire has it stopped */
+.game-top { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.game-no { flex: 1; min-width: 0; font-size: 17px; white-space: nowrap; }
+.game-clock {
+  flex: none; padding: 5px 12px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--border);
+  font-size: 21px; font-weight: 800; line-height: 1.15; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--text);
+}
+.game-clock.stopped { font-size: 16px; font-weight: 700; color: var(--muted); border-style: dashed; }
+.game-clock.low { color: #fff; background: var(--red-bg); border-color: var(--red); }
+.game-clock.low:not(.stopped) { animation: clock-low 1.2s ease-in-out infinite; }
+@keyframes clock-low { 50% { background: rgba(248, 81, 73, 0.4); } }
 .bar-fill { height: 100%; background: linear-gradient(90deg, #2ea043, var(--green)); border-radius: 999px; transition: width 0.6s ease; }
 
 .storm-banner {
@@ -155,9 +167,16 @@ input.pin:placeholder-shown { letter-spacing: normal; }
 .pick { min-height: 48px; font-size: 16px; border-radius: 10px; white-space: normal; display: flex; align-items: center; justify-content: center; gap: 8px; }
 .pick.sel { border-color: var(--accent); background: rgba(88, 166, 255, 0.16); font-weight: 700; }
 
-/* ---------- my rooms (what to do in a room stays hidden until it's scanned) */
+/* ---------- rooms with chores (everyone sees the rooms; what to do in one stays hidden until it's scanned) */
 
 .rooms-head { display: flex; align-items: center; gap: 10px; }
+.rooms-mine { color: var(--amber); font-weight: 600; }
+.floor-group { display: grid; gap: 6px; }
+.floor-head {
+  display: flex; align-items: baseline; gap: 8px; margin: 4px 2px 0; font-size: 12px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.07em; color: var(--muted);
+}
+.floor-n { font-weight: 600; text-transform: none; letter-spacing: 0; font-size: 13px; }
 .rooms-head h2 { margin: 0; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); }
 .map-btn { min-height: 44px; padding: 8px 16px; font-size: 16px; font-weight: 700; border-radius: 10px; flex: none; }
 .carrying {
@@ -171,6 +190,13 @@ input.pin:placeholder-shown { letter-spacing: normal; }
 }
 .room-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .room-name { flex: 1; min-width: 0; font-size: 17px; overflow-wrap: anywhere; }
+.room.mine { border-color: rgba(210, 153, 34, 0.75); box-shadow: inset 4px 0 0 var(--amber); }
+.room-n {
+  flex: none; min-width: 44px; text-align: center; padding: 2px 8px; border-radius: 999px; font-size: 13px; font-weight: 700;
+  font-variant-numeric: tabular-nums; color: var(--text); background: var(--bg); border: 1px solid var(--border);
+}
+.room-n.ok { color: var(--green); border-color: rgba(63, 185, 80, 0.5); background: var(--green-bg); }
+.room-yours-ok { display: block; font-size: 13px; color: var(--green); font-weight: 600; }
 .room-badge { flex: none; background: var(--amber); color: #1a1205; font-weight: 800; font-size: 13px; padding: 3px 10px; border-radius: 999px; }
 .room-ok { flex: none; color: var(--green); font-weight: 800; font-size: 14px; }
 .room-where { display: block; font-size: 13px; color: var(--muted); }
@@ -179,6 +205,9 @@ input.pin:placeholder-shown { letter-spacing: normal; }
 .room-chore.done { opacity: 0.55; text-decoration: line-through; }
 .room-hidden { display: block; font-size: 14px; color: var(--muted); font-style: italic; }
 .room.done { opacity: 0.6; padding: 10px 14px; }
+.room.done.mine { opacity: 1; }
+.room-line { margin: 6px 0 0 !important; font-weight: 700; color: var(--muted); }
+.room-line.ok { color: var(--green); }
 .room.talk { border-style: dashed; }
 .room.talk .chore-btn { justify-self: start; }
 .chore-wait { display: block; font-size: 13px; color: var(--amber); font-weight: 600; text-decoration: none; }
@@ -336,6 +365,22 @@ label.photo-shoot {
 .pin.lab-l .pin-label { left: 4px; transform: none; }
 .pin.lab-r .pin-label { left: auto; right: 4px; transform: none; }
 .map-canvas.zoomed .pin-label, .pin.sel .pin-label { display: block; }
+/* a game room's progress (everyone's chores), under its marker; rooms with no chores this game fade out */
+.pin-n {
+  position: absolute; left: 50%; top: 33px; transform: translateX(-50%); z-index: 1; pointer-events: none; white-space: nowrap;
+  padding: 0 5px; border-radius: 999px; font-size: 10px; font-weight: 900; line-height: 15px; font-variant-numeric: tabular-nums;
+  background: #0d1117; color: #fff; border: 1px solid #fff;
+}
+.pin-n.ok { background: var(--green); color: #04130a; border-color: #e6ffec; }
+.pin-n.inline { position: static; transform: none; display: inline-block; }
+.pin.game .pin-label { top: 50px; }
+/* a chore room with nothing for me: a dark ring (the floor plans have blue dots of their own) */
+.mk.none.game:not(.fire):not(.storm) { width: 20px; height: 20px; background: #0d1117; border: 3px solid #fff; }
+.mk.mini.none.game:not(.fire):not(.storm) { width: 14px; height: 14px; border-width: 2px; }
+.pin.off { opacity: 0.35; }
+.pin.off.sel { opacity: 0.8; }
+.mk.off { opacity: 0.45; }
+.map-row.off { opacity: 0.55; }
 
 .mk {
   position: relative; display: inline-grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: 50%;
@@ -455,6 +500,10 @@ label.photo-shoot {
 /* ---------- game over */
 
 .over-banner { text-align: center; }
+.timeup {
+  justify-self: center; padding: 4px 16px; border-radius: 999px; background: var(--red-bg); border: 1px solid var(--red);
+  color: #ffb3ad; font-weight: 800; font-size: 18px;
+}
 .winner { font-size: 38px !important; }
 .winner.campers { color: var(--green); }
 .winner.lurkers { color: var(--red); }

@@ -1,7 +1,8 @@
 /* global io */
 /**
- * Lake Lurkers phone app at /lake (and /lake/s/:code when a station QR is scanned): sign in, lobby, play ("My rooms":
- * chores stay hidden until their room is scanned), the house map, the in-app QR scanner, station screen, phone games
+ * Lake Lurkers phone app at /lake (and /lake/s/:code when a station QR is scanned): sign in, lobby, play (the game's
+ * countdown, "Rooms with chores": every phone sees each room's progress; my own chores there stay hidden until I scan
+ * the room), the house map, the in-app QR scanner, station screen, phone games
  * (window.LakeGames from games.js; one try each: a lost or quit game moves to another room), activities (timed real-life
  * chores), the talk chore, photos, Campfires, game over,
  * gallery and the host's controls.
@@ -96,8 +97,8 @@
   }
 
   /** A live countdown to a server time; tick() keeps its text current. */
-  const countdown = (until, { prefix = '', done = '', cls = '' } = {}) =>
-    h('span', { class: `cd ${cls}`, 'data-until': until ?? 0, 'data-prefix': prefix, 'data-done': done });
+  const countdown = (until, { prefix = '', suffix = '', done = '', cls = '', low = 0 } = {}) =>
+    h('span', { class: `cd ${cls}`, 'data-until': until ?? 0, 'data-prefix': prefix, 'data-suffix': suffix, 'data-done': done, 'data-low': low || null });
 
   const pdot = (color) => h('span', { class: 'pdot', style: `background:${color ?? 'var(--border)'}` });
   const tag = (text, cls = '') => h('span', { class: `tag ${cls}` }, text);
@@ -559,8 +560,9 @@
     const t = now();
     for (const el of document.querySelectorAll('[data-until]')) {
       const left = Number(el.dataset.until) - t;
-      const text = left > 0 ? `${el.dataset.prefix ?? ''}${fmtLeft(left)}` : el.dataset.done ?? '';
+      const text = left > 0 ? `${el.dataset.prefix ?? ''}${fmtLeft(left)}${el.dataset.suffix ?? ''}` : el.dataset.done ?? '';
       if (el.textContent !== text) el.textContent = text;
+      if (el.dataset.low) el.classList.toggle('low', left < Number(el.dataset.low)); // red when time is short
     }
     for (const el of document.querySelectorAll('[data-ready-at]')) {
       const off = el.dataset.blocked === '1' || t < Number(el.dataset.readyAt);
@@ -653,22 +655,37 @@
         h('div', { class: 'small muted' }, 'You won’t be dealt in. You can still follow along here.')));
   }
 
+  const LOW_MS = 5 * 60_000; // the countdown turns red under 5 minutes
+
+  /** The Campers' countdown: ticking (frozen while paused), stopped during a Campfire, or nothing without a time limit. */
+  function gameClock(s) {
+    const c = s.clock;
+    if (!c) return '';
+    if (c.endsAt == null) {
+      const left = c.left ?? 0;
+      return h('span', { class: `game-clock stopped ${left < LOW_MS ? 'low' : ''}` }, `⏱ stopped · ${fmtLeft(left)} left`);
+    }
+    return countdown(c.endsAt, { prefix: '⏱ ', suffix: ' left', done: '⏱ 0:00 left', cls: 'game-clock', low: LOW_MS });
+  }
+
   function gameHeader(s) {
     const bar = s.bar ?? { done: 0, total: 0 };
     const pct = bar.total ? Math.round((100 * bar.done) / bar.total) : 0;
     return [
       h('section', { class: 'box game-head' },
-        h('div', { class: 'row' },
-          h('b', {}, `Game ${s.gameNo}`),
-          h('span', { class: 'grow' }),
-          h('span', { class: 'small muted' }, s.settings?.barMode === 'meetings' ? 'Chore bar moves at Campfires' : 'Camp chores')),
+        h('div', { class: 'game-top' },
+          h('b', { class: 'game-no' }, `Game ${s.gameNo}`),
+          gameClock(s)),
         h('div', { class: 'bar', role: 'progressbar', 'aria-valuenow': pct, 'aria-valuemin': 0, 'aria-valuemax': 100 },
           h('div', { class: 'bar-fill', style: `width:${pct}%` })),
-        h('div', { class: 'row small muted' }, `${bar.done} of ${bar.total} chores done`, h('span', { class: 'grow' }), `${pct}%`)),
+        h('div', { class: 'row small muted' },
+          `${bar.done} of ${bar.total} chores done`,
+          s.settings?.barMode === 'meetings' ? ' (moves at Campfires)' : '',
+          h('span', { class: 'grow' }), `${pct}%`)),
       s.storm ? stormBanner(s.storm) : '',
     ];
   }
-  const headerData = (s) => [s.gameNo, s.bar, s.storm, s.settings?.barMode];
+  const headerData = (s) => [s.gameNo, s.bar, s.storm, s.settings?.barMode, s.clock];
 
   function stormBanner(storm) {
     return h('section', { class: 'storm-banner' },
@@ -833,7 +850,7 @@
 
   function buildSignin() {
     const name = h('input', { class: 'big-input', placeholder: 'Your name', autocomplete: 'nickname', maxLength: 20, autocapitalize: 'words', enterkeyhint: 'next' });
-    const pin = plain(h('input', { class: 'big-input pin', placeholder: '4-digit PIN', inputmode: 'numeric', pattern: '[0-9]*', maxLength: 4, enterkeyhint: 'go' }));
+    const pin = plain(h('input', { class: 'big-input pin-input', placeholder: '4-digit PIN', inputmode: 'numeric', pattern: '[0-9]*', maxLength: 4, enterkeyhint: 'go' }));
     const error = h('p', { class: 'error' });
     const btn = h('button', { type: 'submit', class: 'primary btn-big' }, 'Join the game');
     const form = h('form', {
@@ -891,7 +908,7 @@
         ]);
         fill(mine, [s.me.sitOut], () => sitOutToggle(s.me));
         fill(players, [s.players, s.me.id], () => playerList(s));
-        fill(info, [s.settings, s.players.map((p) => p.sitOut)], () => settingsSummary(s));
+        fill(info, [s.settings, s.players.map((p) => p.sitOut), s.stations.length], () => settingsSummary(s));
       },
     };
   }
@@ -912,13 +929,20 @@
     const st = s.settings ?? {};
     const n = s.players.filter((p) => !p.sitOut).length;
     const lurkers = st.lurkers || (n <= 6 ? 1 : 2);
-    const chores = [[st.taskCount ?? 0, 'phone game'], [st.actCount ?? 0, 'activity', 'activities'], [st.photoCount, 'photo'], [st.carryCount, 'carry', 'carries']]
-      .filter(([n]) => n > 0).map(([n, one, many]) => plural(n, one, many)).join(', ') || 'no chores';
+    // the rooms are picked from the switched-on stations, so there can't be more than those
+    const rooms = Math.min(st.rooms ?? 12, s.stations?.length ?? Infinity);
+    const per = st.choresPerRoom ?? 3;
+    const total = rooms * per;
+    const campers = n - lurkers;
+    const lo = campers > 0 ? Math.floor(total / campers) : 0;
+    const hi = campers > 0 ? Math.ceil(total / campers) : 0;
     return [
       h('h2', {}, 'This game'),
       h('ul', { class: 'facts' },
         h('li', {}, `${plural(lurkers, 'Lurker')}${st.lurkers ? '' : ' (picked by player count)'}`),
-        h('li', {}, `Everyone gets ${chores}`),
+        h('li', {}, `${plural(rooms, 'room')} with chores, picked at random: ${per} in each, ${total} in all`),
+        campers > 0 ? h('li', {}, `Split among the Campers: ${lo === hi ? lo : `${lo}–${hi}`} each`) : '',
+        h('li', {}, st.timeLimit ? `${st.timeLimit}-minute clock (it stops during Campfires). If it runs out, the Lurkers win` : 'No time limit'),
         h('li', {}, `Lurkers can kill every ${fmtSecs(st.killCooldown)}`),
         h('li', {}, `${plural(st.emergencies, 'bell ring')} each at the ${s.campfire?.name ?? 'Campfire'}`),
         h('li', {}, st.storm ? `Storms on: ${fmtSecs(st.stormSeconds)} to secure two stations` : 'Storms off'),
@@ -931,12 +955,12 @@
       h('summary', {}, 'How to play, in 30 seconds'),
       h('ol', {},
         h('li', {}, 'Press and hold your role card to see if you’re a Camper or a Lurker. Keep it secret.'),
-        h('li', {}, 'My rooms shows where your chores are, and 🗺 Map shows where those rooms are. What to do there stays hidden until you get there.'),
+        h('li', {}, 'Rooms with chores lists this game’s rooms (new ones every game) and how many of each room’s chores are done. The amber “for you” badge marks where yours are, and 🗺 Map shows where the rooms are. What to do there stays hidden until you get there.'),
         h('li', {}, 'At the room, scan its QR code: tap 📷 Scan QR right here in the app (or use your phone’s camera, or type the code under it). Then do the chore: a phone game (about 2 minutes), an activity, a photo or carrying something. 💬 chores work anywhere.'),
         h('li', {}, 'Phone games are one try: lose one (or quit it) and it moves to another room, hidden again until you find it there.'),
         h('li', {}, 'Lurkers tap Campers on the shoulder to kill them. If you’re tapped, sit down and stay silent.'),
         h('li', {}, 'Found a body? Type the code on their phone. Everyone runs to the Campfire to talk and vote.'),
-        h('li', {}, 'Campers win by finishing every chore or voting out every Lurker.')));
+        h('li', {}, 'Campers win by finishing every chore or voting out every Lurker. Watch the ⏱ clock: if it runs out first, the Lurkers win. It stops during Campfires.')));
   }
 
   function buildPlay() {
@@ -961,7 +985,7 @@
           }, waitingLabel(waiting)) : '',
         ]);
         renderRole();
-        fill(chores, [you.chores, you.status, ui.partnerOf, s.stations.map((st) => st.id)], () => roomList(s, you));
+        fill(chores, [you.chores, you.status, ui.partnerOf, s.stations.map((st) => st.id), s.rooms], () => roomList(s, you));
         report.update(you);
       },
     };
@@ -1005,38 +1029,81 @@
     return { rooms: list, talk };
   }
 
+  /**
+   * This game's rooms with chores (the same list on every phone, Camper or Lurker) merged with mine: each room's
+   * progress over the Campers' chores, plus what I have there (hidden until I scan it). A room of mine that isn't on
+   * the list (a carry's drop-off) is added without progress while I have something to do there. Grouped by floor; in a
+   * floor, rooms with something for me first, then rooms with chores left, then finished ones.
+   */
+  function gameRooms(s, you) {
+    const { rooms: mine, talk } = myRooms(s, you);
+    const all = new Map();
+    for (const r of s.rooms ?? []) all.set(r.id, { id: r.id, name: r.name, where: r.where, floor: r.floor, game: true, total: r.total, done: r.done, chores: [], left: 0 });
+    for (const m of mine) {
+      const r = all.get(m.id);
+      if (r) Object.assign(r, { chores: m.chores, left: m.left });
+      else all.set(m.id, { ...m, game: false, total: 0, done: 0 });
+    }
+    // a room off the list only shows while I have something to do there (a delivered carry counts at its pick-up room)
+    const list = [...all.values()].filter((r) => r.game || r.left).map((r) => ({ ...r, complete: r.game && r.total > 0 && r.done >= r.total }));
+    const rank = (r) => (r.left ? 0 : r.game && !r.complete ? 1 : 2);
+    const floors = new Map();
+    for (const r of list.sort((a, b) => (FLOOR_RANK[a.floor] ?? 9) - (FLOOR_RANK[b.floor] ?? 9) || rank(a) - rank(b) || a.name.localeCompare(b.name))) {
+      if (!floors.has(r.floor)) floors.set(r.floor, []);
+      floors.get(r.floor).push(r);
+    }
+    return { floors: [...floors.entries()].map(([floor, rooms]) => ({ floor, rooms })), list, talk };
+  }
+
   function roomList(s, you) {
     const ghost = you.status === 'ghost';
-    const { rooms, talk } = myRooms(s, you);
+    const { floors, list, talk } = gameRooms(s, you);
     const done = you.chores.filter((c) => c.done).length;
+    const game = list.filter((r) => r.game);
+    const finished = game.filter((r) => r.complete).length;
+    const mineIn = list.filter((r) => r.left).length;
     const carrying = you.chores.filter((c) => c.kind === 'carry' && c.step >= 1 && !c.done);
     return [
       h('div', { class: 'rooms-head' },
-        h('div', { class: 'grow' }, h('h2', {}, 'My rooms'), h('div', { class: 'small muted' }, `${done} of ${plural(you.chores.length, 'chore')} done`)),
+        h('div', { class: 'grow' },
+          h('h2', {}, 'Rooms with chores'),
+          h('div', { class: 'small muted' }, `${plural(game.length, 'room')}${finished ? ` · ${finished} finished` : ''}`),
+          h('div', { class: 'small rooms-mine' }, `Yours: ${done} of ${plural(you.chores.length, 'chore')} done${mineIn ? ` · in ${plural(mineIn, 'room')}` : ''}`)),
         h('button', { type: 'button', class: 'map-btn', onclick: () => openMap() }, '🗺 Map')),
       carrying.map((c) => h('button', { type: 'button', class: 'carrying', onclick: () => openMap(c.toId) },
         `📦 Carrying ${c.item} → drop at the ${c.toName}`)),
-      h('ul', { class: 'rooms' },
-        rooms.filter((r) => r.left).map(roomItem),
-        talk.filter((c) => !c.done).map((c) => talkItem(c, ghost)),
-        rooms.filter((r) => !r.left).map(roomItem),
-        talk.filter((c) => c.done).map((c) => talkItem(c, ghost))),
-      h('p', { class: 'small muted' }, 'What to do in a room stays hidden until you scan its QR code there. Phone games take about 2 minutes; lose one (or quit) and it moves to another room. Tap a room to see it on the map.'),
+      talk.some((c) => !c.done) ? h('ul', { class: 'rooms' }, talk.filter((c) => !c.done).map((c) => talkItem(c, ghost))) : '',
+      floors.map(({ floor, rooms }) => {
+        const g = rooms.filter((r) => r.game);
+        const left = g.reduce((n, r) => n + Math.max(0, r.total - r.done), 0);
+        return h('div', { class: 'floor-group' },
+          h('h3', { class: 'floor-head' },
+            h('span', { class: 'grow' }, floorLabel(floor) || 'Elsewhere'),
+            g.length ? h('span', { class: 'floor-n' }, left ? `${plural(left, 'chore')} left` : '✓ all done') : ''),
+          h('ul', { class: 'rooms' }, rooms.map(roomItem)));
+      }),
+      talk.some((c) => c.done) ? h('ul', { class: 'rooms' }, talk.filter((c) => c.done).map((c) => talkItem(c, ghost))) : '',
+      h('p', { class: 'small muted' }, 'Every player sees this list. The numbers count all the Campers’ chores in a room; the amber badge is yours. What to do stays hidden until you scan the room’s QR code there. Tap a room to see it on the map.'),
     ];
   }
 
-  /** One room: tap it to see it on the map. */
+  /** One room: its progress for everyone, and mine there. Tap it to see it on the map. */
   function roomItem(r) {
     const shown = r.chores.filter((c) => !c.hidden);
     const hidden = r.chores.filter((c) => c.hidden && !c.done).length;
+    const mineDone = r.chores.length > 0 && !r.left;
+    const quiet = !r.left && (r.complete || (!r.game && mineDone)); // nothing left here that I know of
+    const label = [r.name, r.game ? `${r.done} of ${r.total} chores done` : '', r.left ? `${r.left} for you` : mineDone ? 'yours done' : ''].filter(Boolean).join(', ');
     return h('li', {},
-      h('button', { type: 'button', class: `room ${r.left ? '' : 'done'}`, onclick: () => openMap(r.id) },
+      h('button', { type: 'button', class: `room ${r.left ? 'mine' : ''} ${quiet ? 'done' : ''}`, 'aria-label': label, onclick: () => openMap(r.id) },
         h('span', { class: 'room-head' },
           h('b', { class: 'room-name' }, r.name),
-          r.left ? h('span', { class: 'room-badge' }, `${r.left} to do`) : h('span', { class: 'room-ok' }, '✓ done')),
-        r.left ? h('span', { class: 'room-where' }, r.where) : '',
+          r.left ? h('span', { class: 'room-badge' }, `${r.left} for you`) : '',
+          r.game ? h('span', { class: `room-n ${r.complete ? 'ok' : ''}` }, r.complete ? `✓ ${r.done}/${r.total}` : `${r.done}/${r.total}`) : ''),
+        quiet ? '' : h('span', { class: 'room-where' }, r.where),
         r.left ? shown.map(roomChore) : '',
-        r.left && hidden ? h('span', { class: 'room-hidden' }, shown.length ? `🔒 ${plural(hidden, 'more chore')}: scan the room to see` : '🔒 Scan the room to see what to do') : ''));
+        r.left && hidden ? h('span', { class: 'room-hidden' }, shown.length ? `🔒 ${plural(hidden, 'more chore')}: scan the room to see` : '🔒 Scan the room to see what to do') : '',
+        mineDone ? h('span', { class: 'room-yours-ok' }, '✓ Yours here are done') : ''));
   }
 
   function choreText(c) {
@@ -1376,10 +1443,13 @@
         const o = s.over;
         if (!o) return;
         const myRole = o.roles.find((r) => r.id === s.me.id);
-        fill(banner, [s.gameNo, o.winner, o.reason, myRole], () => [
+        const timeUp = /time ran out/i.test(o.reason ?? '');
+        fill(banner, [s.gameNo, o.winner, o.reason, myRole, s.bar], () => [
           h('div', { class: 'kicker' }, `Game ${s.gameNo} is over`),
           h('h1', { class: `winner ${o.winner ?? 'none'}` }, o.winner === 'campers' ? 'Campers win!' : o.winner === 'lurkers' ? 'Lurkers win!' : 'Game ended'),
+          timeUp ? h('div', { class: 'timeup' }, '⏱ Time’s up!') : '',
           h('p', {}, `${capital(o.reason ?? '')}.`),
+          s.bar?.total ? h('p', { class: 'small muted' }, `Chores done: ${s.bar.done} of ${s.bar.total}`) : '',
           myRole ? h('p', { class: 'big' }, `You were a ${myRole.role === 'lurker' ? 'Lurker' : 'Camper'}.`,
             o.winner === `${myRole.role}s` ? ' You won! 🎉' : '') : '',
         ]);
@@ -1478,14 +1548,16 @@
     const bell = slot();
     const storm = slot();
     const note = slot();
+    const room = slot();
     v.root = h('div', { class: 'sheet-inner' },
       sheetHead(() => showView(null)),
       h('div', { class: 'station-head' },
         h('div', { class: 'kicker' }, floorLabel(st.floor)),
         h('h1', {}, st.name),
-        h('p', { class: 'muted' }, st.where)),
+        h('p', { class: 'muted' }, st.where),
+        room),
       storm, chores, bell, note);
-    v.update = () => renderStation(v, { chores, bell, storm, note });
+    v.update = () => renderStation(v, { chores, bell, storm, note, room });
     showView(v);
     return true;
   }
@@ -1494,6 +1566,17 @@
     const s = store.state;
     const you = s?.you;
     const st = v.station;
+    // everyone sees how far this room's chores are, like on the room list
+    const gr = s?.phase === 'play' || s?.phase === 'meeting' ? s.rooms?.find((x) => x.id === st.id) : null;
+    const listed = !!s?.rooms && (s.phase === 'play' || s.phase === 'meeting');
+    // a room off the list can still hold something of mine (a carry's drop-off): don't call it empty then
+    const mineHere = !!you?.chores.some((c) => !c.done && (c.kind === 'carry' ? c.toId === st.id : c.stationId === st.id));
+    fill(slots.room, [listed, gr, mineHere], () => {
+      if (!listed) return '';
+      if (!gr) return mineHere ? '' : h('p', { class: 'room-line' }, 'No chores in this room this game.');
+      const ok = gr.total > 0 && gr.done >= gr.total;
+      return h('p', { class: `room-line ${ok ? 'ok' : ''}` }, ok ? `✓ All ${gr.total} chores here are done` : `This room: ${gr.done} of ${plural(gr.total, 'chore')} done`);
+    });
     if (!s || s.phase !== 'play' || !you) {
       const msg = s?.phase === 'lobby' ? 'The game hasn’t started yet. Come back once it has!'
         : s?.phase === 'over' ? 'This game is over.'
@@ -1510,8 +1593,8 @@
     fill(slots.storm, ss ? [ss.secured, you.status, s.storm.endsAt] : null, () => (ss ? stormBox(s, ss, you, v) : ''));
     const nothing = !here.length && !atCampfire && !ss;
     const allDone = here.length > 0 && here.every((c) => c.done) && !atCampfire && !ss;
-    fill(slots.note, [nothing, allDone], () => (nothing ? h('p', { class: 'note' }, 'Nothing for you here. Check My rooms (or the 🗺 Map) for where to go.')
-      : allDone ? h('p', { class: 'note' }, 'All done here ✓') : ''));
+    fill(slots.note, [nothing, allDone], () => (nothing ? h('p', { class: 'note' }, 'Nothing for you here. Check Rooms with chores (or the 🗺 Map) for where to go.')
+      : allDone ? h('p', { class: 'note' }, 'Your chores here are done ✓') : ''));
   }
 
   function stationChore(c, v) {
@@ -1873,7 +1956,7 @@
       st?.where ? h('p', { class: 'muted' }, st.where) : '',
       h('p', { class: 'small muted' }, 'It’s hidden again until you scan that room, and you play it from the start there.'),
       h('div', { class: 'pz-lost-btns' },
-        h('button', { type: 'button', class: 'primary btn-big', onclick: () => showView(null) }, 'Back to my rooms'),
+        h('button', { type: 'button', class: 'primary btn-big', onclick: () => showView(null) }, 'Back to the rooms'),
         st ? h('button', { type: 'button', class: 'btn-big', onclick: () => openMap(st.id) }, '🗺 Show it on the map') : '')];
   }
 
@@ -2255,21 +2338,25 @@
     render();
   }
 
-  // ---- the house map: where my rooms are (never anything about anyone else)
+  // ---- the house map: this game's rooms with chores (public counts) and mine (only my own chores, never anyone else's)
 
   const MAP_TABS = [['main', 'Main'], ['upstairs', 'Upstairs'], ['basement', 'Basement'], ['other', 'Outside']];
   const tabOf = (st) => st?.map?.floor ?? 'other';
 
-  /** Per enabled station: my chores there, the Campfire, the storm and whether I scanned it last. */
+  /** Per enabled station: my chores there, the room's progress (game rooms), the Campfire, the storm and my last scan. */
   function mapMarks(s) {
     const { rooms } = myRooms(s, s.you);
     const last = lastStationId(s);
     const marks = {};
     for (const st of s.stations) {
       const r = rooms.find((x) => x.id === st.id);
+      const gr = s.rooms?.find((x) => x.id === st.id);
       const storm = s.storm?.stations.find((x) => x.id === st.id);
       const open = r ? r.chores.filter((c) => !c.done) : [];
       marks[st.id] = {
+        game: !!gr,
+        rdone: gr?.done ?? 0,
+        rtotal: gr?.total ?? 0,
         todo: open.length,
         total: r?.chores.length ?? 0,
         hidden: open.filter((c) => c.hidden).length,
@@ -2296,7 +2383,7 @@
 
   /** The marker: amber count to do, green ✓ all done, gray dot nothing for me; 🔥 Campfire; red pulse storm; ring last scan. */
   function mapBadge(m, extra = '') {
-    const cls = ['mk', m.todo ? 'todo' : m.total ? 'ok' : 'none', m.fire ? 'fire' : '', m.storm === 'on' ? 'storm' : '', m.last ? 'last' : '', extra]
+    const cls = ['mk', m.todo ? 'todo' : m.total ? 'ok' : 'none', m.game ? 'game' : '', m.fire ? 'fire' : '', m.storm === 'on' ? 'storm' : '', m.last ? 'last' : '', extra]
       .filter(Boolean).join(' ');
     if (m.fire) {
       return h('span', { class: cls }, '🔥', m.todo ? h('span', { class: 'mk-n' }, m.todo) : m.total ? h('span', { class: 'mk-n ok' }, '✓') : '');
@@ -2304,18 +2391,26 @@
     return h('span', { class: cls }, m.todo ? String(m.todo) : m.total ? '✓' : '');
   }
 
-  const pinStatus = (m) => (m.todo ? `${m.todo} to do` : m.total ? 'done' : 'nothing for you');
+  const roomDone = (m) => m.game && m.rtotal > 0 && m.rdone >= m.rtotal;
+  const pinStatus = (m) => [
+    m.todo ? `${m.todo} for you` : m.total ? 'yours done' : '',
+    m.game ? `room ${m.rdone}/${m.rtotal}` : m.total ? '' : 'no chores',
+  ].filter(Boolean).join(' · ');
+  /** The room's progress for everyone (game rooms only). */
+  const roomChip = (m, extra = '') => (m.game ? h('span', { class: `pin-n ${roomDone(m) ? 'ok' : ''} ${extra}` }, `${roomDone(m) ? '✓' : ''}${m.rdone}/${m.rtotal}`) : '');
+  // a room with no chores this game fades out, unless it matters to me (my drop-off, the Campfire, a storm)
+  const offMap = (m) => !m.game && !m.total && !m.fire && !m.storm;
 
   function mapPin(st, m, v) {
     return h('button', {
       type: 'button',
       // a name near an edge hangs inward, so it never runs off the map
-      class: `pin ${st.map.x > 72 ? 'lab-r' : st.map.x < 28 ? 'lab-l' : ''} ${v.sel === st.id ? 'sel' : ''}`,
+      class: `pin ${st.map.x > 72 ? 'lab-r' : st.map.x < 28 ? 'lab-l' : ''} ${v.sel === st.id ? 'sel' : ''} ${m.game ? 'game' : ''} ${offMap(m) ? 'off' : ''}`,
       style: `left:${st.map.x}%;top:${st.map.y}%`,
       'data-id': st.id,
       'aria-label': `${st.name}: ${pinStatus(m)}`,
       onclick: () => v.pick(st.id),
-    }, mapBadge(m), h('span', { class: 'pin-label' }, st.name));
+    }, mapBadge(m), roomChip(m), h('span', { class: 'pin-label' }, st.name));
   }
 
   function mapInfo(st, m) {
@@ -2323,12 +2418,15 @@
     if (m.storm === 'on') lines.push(h('p', { class: 'map-storm' }, '⛈ Storm station! Two different players must secure the two storm stations.'));
     if (m.storm === 'secured') lines.push(h('p', { class: 'small ok-text' }, '⛈ Secured for this storm'));
     if (m.fire) lines.push(h('p', {}, '🔥 The Campfire: everyone meets here, and the bell is here.'));
+    if (m.game) {
+      lines.push(h('p', { class: roomDone(m) ? 'ok-text' : '' }, roomDone(m) ? `✓ All ${m.rtotal} chores in this room are done` : `This room: ${m.rdone} of ${plural(m.rtotal, 'chore')} done`));
+    } else if (!m.total) lines.push(h('p', { class: 'muted' }, 'No chores in this room this game.'));
     if (m.todo) {
       lines.push(h('p', { class: 'map-todo' }, `${m.todo} to do here`));
       if (m.titles.length) lines.push(h('ul', { class: 'map-titles' }, m.titles.map((t) => h('li', {}, t))));
       if (m.hidden) lines.push(h('p', { class: 'small muted' }, `🔒 ${m.titles.length ? `${plural(m.hidden, 'more chore')} hidden` : 'Hidden'} until you scan the room.`));
     } else if (m.total) lines.push(h('p', { class: 'ok-text' }, '✓ Your chores here are done'));
-    else lines.push(h('p', { class: 'muted' }, 'Nothing for you here.'));
+    else if (m.game) lines.push(h('p', { class: 'muted' }, 'Nothing for you here.'));
     if (m.last) lines.push(h('p', { class: 'small muted' }, '📍 You scanned this one last.'));
     return h('section', { class: 'box map-info' },
       h('div', { class: 'row' }, mapBadge({ ...m, last: false }, 'inline'), h('div', { class: 'grow' }, h('b', { class: 'map-info-name' }, st.name), h('div', { class: 'small muted' }, st.where))),
@@ -2336,9 +2434,10 @@
   }
 
   const mapLegend = () => h('div', { class: 'map-legend small muted' },
-    h('span', {}, mapBadge({ todo: 2, total: 2 }, 'inline mini'), 'to do'),
-    h('span', {}, mapBadge({ todo: 0, total: 1 }, 'inline mini'), 'done'),
-    h('span', {}, mapBadge({ todo: 0, total: 0 }, 'inline mini'), 'nothing for you'),
+    h('span', {}, mapBadge({ todo: 2, total: 2 }, 'inline mini'), 'for you'),
+    h('span', {}, mapBadge({ todo: 0, total: 1 }, 'inline mini'), 'yours done'),
+    h('span', {}, mapBadge({ todo: 0, total: 0, game: true }, 'inline mini'), roomChip({ game: true, rdone: 1, rtotal: 3 }, 'inline'), 'room with chores: how many are done'),
+    h('span', {}, h('span', { class: 'mk none inline mini off' }), 'no chores this game'),
     h('span', {}, '🔥 Campfire'),
     h('span', {}, mapBadge({ todo: 0, total: 0, storm: 'on' }, 'inline mini'), 'storm'),
     h('span', {}, mapBadge({ todo: 0, total: 0, last: true }, 'inline mini'), 'scanned last'));
@@ -2411,7 +2510,7 @@
         if (floor) return '';
         if (!here.length) return h('p', { class: 'note' }, 'No outside stations are in this game.');
         return h('ul', { class: 'map-list' }, here.map((x) => h('li', {},
-          h('button', { type: 'button', class: `map-row ${v.sel === x.id ? 'sel' : ''}`, onclick: () => v.pick(x.id) },
+          h('button', { type: 'button', class: `map-row ${v.sel === x.id ? 'sel' : ''} ${offMap(marks[x.id]) ? 'off' : ''}`, onclick: () => v.pick(x.id) },
             mapBadge(marks[x.id], 'inline'),
             h('span', { class: 'grow' }, h('b', {}, x.name), h('span', { class: 'map-row-where' }, x.where)),
             h('span', { class: 'map-row-status' }, pinStatus(marks[x.id]))))));
@@ -2970,11 +3069,11 @@
     ['Players', [
       { key: 'lurkers', label: 'Lurkers (auto: 1 for up to 6 players, else 2)', type: 'select', options: [[0, 'Auto'], [1, '1'], [2, '2'], [3, '3']] },
     ]],
-    ['Chores per player', [
-      { key: 'taskCount', label: 'Phone games (0–8)', type: 'num', max: 8 },
-      { key: 'actCount', label: 'Activities (0–8)', type: 'num', max: 8 },
-      { key: 'photoCount', label: 'Photos', type: 'num', max: 3 },
-      { key: 'carryCount', label: 'Carries', type: 'num', max: 3 },
+    // chores are dealt per room now: the old per-player counts (taskCount, actCount, photoCount, carryCount) are unused
+    ['Chores', [
+      { key: 'rooms', label: 'Rooms with chores (1–30)', type: 'num', min: 1, max: 30 },
+      { key: 'choresPerRoom', label: 'Chores per room (1–5)', type: 'num', min: 1, max: 5 },
+      { key: 'timeLimit', label: 'Time limit (min, 0 = none)', type: 'num', max: 180 },
       { key: 'barMode', label: 'Chore bar', type: 'select', options: [['live', 'Moves live'], ['meetings', 'Only moves at Campfires']] },
     ]],
     ['Kills (seconds)', [
@@ -3005,16 +3104,28 @@
     const row = (label, input) => h('label', { class: 'set-row' }, h('span', {}, label), input);
     const control = (d) => {
       let input;
-      if (d.type === 'num') input = h('input', { type: 'number', min: 0, max: d.max, step: 1, inputmode: 'numeric' });
+      if (d.type === 'num') input = h('input', { type: 'number', min: d.min ?? 0, max: d.max, step: 1, inputmode: 'numeric' });
       else if (d.type === 'check') input = h('input', { type: 'checkbox' });
       else input = h('select', {}, d.options.map(([value, label]) => h('option', { value: String(value) }, label)));
       f.inputs[d.key] = input;
       return row(d.label, input);
     };
 
+    const choreHint = h('p', { class: 'small muted set-hint' });
+    /** "12 rooms × 3 = 36 chores…", from what's in the boxes right now. */
+    const updateHint = () => {
+      const val = (k) => Number(f.inputs[k]?.value);
+      const on = Object.values(f.boxes).filter((b) => b.checked).length;
+      const rooms = Math.min(val('rooms') || 0, on || Infinity);
+      const per = val('choresPerRoom') || 0;
+      const t = val('timeLimit');
+      choreHint.textContent = `Each game picks ${plural(rooms, 'room')} at random from the stations switched on below${rooms < (val('rooms') || 0) ? ' (that’s all of them)' : ''}: `
+        + `${rooms * per} chores, split evenly among the Campers. ${t > 0 ? `The Lurkers win if they aren’t done in ${plural(t, 'minute')} (Campfires and pauses don’t count).` : 'No time limit.'}`;
+    };
     const markDirty = () => {
       f.dirty = true;
       status.textContent = 'Unsaved changes';
+      updateHint();
     };
     const save = async (e) => {
       e.preventDefault();
@@ -3045,6 +3156,7 @@
           const raw = input.value.trim();
           const v = Number(raw);
           if (raw === '' || !Number.isInteger(v) || v < 0) throw new Error(`“${d.label}” needs a whole number.`);
+          if (v < (d.min ?? 0)) throw new Error(`“${d.label}” starts at ${d.min}.`);
           if (d.max != null && v > d.max) throw new Error(`“${d.label}” goes up to ${d.max}.`);
           if (v !== cur[d.key]) patch[d.key] = v;
         } else if (d.type === 'check') {
@@ -3097,12 +3209,14 @@
       [stormA.value, stormB.value] = cur.stormStations ?? [];
       f.dirty = false;
       status.textContent = '';
+      updateHint();
     };
 
     f.el = h('form', { class: 'settings', oninput: markDirty, onchange: markDirty, onsubmit: save },
       SETTINGS.map(([legend, list]) => h('fieldset', {},
         h('legend', {}, legend),
         list.map(control),
+        legend === 'Chores' ? choreHint : '',
         legend === 'Storm' ? [row('Storm station 1', stormA), row('Storm station 2', stormB)] : '')),
       h('fieldset', {}, h('legend', {}, 'Stations in play'), stations),
       h('div', { class: 'save-bar row' },

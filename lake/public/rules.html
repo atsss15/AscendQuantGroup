@@ -24,6 +24,7 @@
     /* sections */
     .sec { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; scroll-margin-top: 64px; }
     .sec > h2 { margin: 0 0 10px; font-size: 21px; line-height: 1.25; }
+    .sec h3[id] { scroll-margin-top: 64px; }
     .sec h3 { margin: 16px 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
     .sec p { margin: 0 0 10px; }
     .sec ul, .sec ol { margin: 0 0 10px; padding-left: 22px; }
@@ -40,7 +41,7 @@
     .say { color: var(--amber); font-weight: 700; white-space: nowrap; }
     /* a button or label exactly as the game app words it */
     .ui { white-space: nowrap; font-weight: 600; font-size: 0.92em; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 0 6px; }
-    [data-unit], [data-chores] > * { white-space: nowrap; } /* "2 activities" never splits between the number and the word */
+    [data-unit] { white-space: nowrap; } /* "12 rooms" never splits between the number and the word */
     .code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; background: var(--panel-2); border-radius: 4px; padding: 0 6px; }
     .site { font-weight: 700; white-space: nowrap; }
 
@@ -70,11 +71,11 @@
     .stations li.off { opacity: 0.5; }
     .stations li.off .name { text-decoration: line-through; }
     .stations li.off::after { content: 'Off this game'; font-size: 12px; color: var(--muted); }
-    .stations [data-room].off { text-decoration: line-through; opacity: 0.6; }
     .tag { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; vertical-align: 2px; }
     .tag.fire { background: rgba(88, 166, 255, 0.16); color: var(--accent); }
     .tag.storm { background: rgba(210, 153, 34, 0.18); color: var(--amber); }
-    .tag.time, .tag.voice, .tag.pair, .tag.lose, .tag.safe { text-transform: none; letter-spacing: 0; font-size: 12px; }
+    .tag.time, .tag.voice, .tag.pair, .tag.lose, .tag.safe, .tag.chores { text-transform: none; letter-spacing: 0; font-size: 12px; }
+    .tag.chores { background: rgba(63, 185, 80, 0.16); color: var(--green); } /* this game's rooms with chores, live */
     .tag.lose { background: var(--red-bg); color: #ffb3ad; }
     .tag.safe { background: var(--panel); color: var(--muted); border: 1px solid var(--border); }
     .tag.time { background: rgba(63, 185, 80, 0.16); color: var(--green); }
@@ -134,7 +135,7 @@
     <div class="hero">
       <h1>Lake Lurkers</h1>
       <p class="lede">A real-life game of chores, secrets and shoulder taps. The Campers keep the lake house running. Hidden among them: <b data-s="lurkers" data-unit="Lurker">2 Lurkers</b>. Find them before they get you.</p>
-      <p class="small muted" id="live-note">Times on this page are the defaults. The host can change them between games, and the game app always shows the live numbers.</p>
+      <p class="small muted" id="live-note">Numbers on this page are the defaults. The host can change them between games, and the game app always shows the live numbers.</p>
     </div>
 
     <nav class="toc" aria-label="Sections">
@@ -149,6 +150,7 @@
       <a href="#campfire">Campfire</a>
       <a href="#ghosts">Ghosts</a>
       <a href="#storm" data-hide="stormOff">Storm</a>
+      <a href="#clock" data-hide="clockOff">Clock</a>
       <a href="#win">Winning</a>
       <a href="#safety">Safety</a>
       <a href="#tips">Tips</a>
@@ -163,11 +165,13 @@
       <ol>
         <li><b>Sign in</b> at <a class="site" href="/lake">ascend-exchange.fly.dev/lake</a> with your name and a 4-digit PIN. Meet at the <b>Campfire</b>: the Great Room, by the big fireplace.</li>
         <li><b>Peek at your role:</b> press and hold the role card, then tap <span class="ui">Hide</span>. Most of you are <span class="camper">Campers</span>. Hidden among you: <b data-s="lurkers" data-unit="Lurker">2 Lurkers</b>, and Lurkers know each other.</li>
-        <li><b>Your chores are secret, even from you.</b> <b>My rooms</b> and the <span class="ui">🗺 Map</span> only show which rooms to go to. In each room, scan its QR code: tap <span class="ui">📷 Scan QR</span> in the game (or use your phone’s camera, or type the code under it). Then you see what to do there.</li>
-        <li><b>Do them:</b> <span data-chores="and"><b data-s="taskCount" data-unit="phone game">2 phone games</b>, <b data-s="actCount" data-unit="activity">2 activities</b>, <b data-s="photoCount" data-unit="photo">1 photo</b> and <b data-s="carryCount" data-unit="carry">1 carry</b></span>. <span data-hide="actOff">Activities are for real: hold a plank, sing on the radio, dance by the fire. Tap <span class="ui">▶ Start</span>, keep going until the timer runs out, then tap <span class="ui">Done</span>.</span></li>
-        <li data-hide="taskOff"><b>Phone games</b> (Snake, Wordle, Blackjack and more) take about 2 min. <b>Lose one, or quit it, and there’s no second try:</b> the game moves to another room, usually on another floor. Go find it.</li>
-        <li><b>Campers</b> win by filling the chore bar or voting out every Lurker.</li>
-        <li><b>Lurkers</b> blend in, fake chores, and kill Campers: a tap on the shoulder, then confirm the kill on their phone.</li>
+        <li><b>Each game, <span data-s="rooms" data-unit="room">12 rooms</span> get chores</b>, picked at random: <b data-s="choresPerRoom" data-unit="chore">3 chores</b> in each, <span data-s="choreTotal" data-unit="chore">36 chores</span> in all. <b>Every phone lists them</b> under <b>Rooms with chores</b>, with how many of each room’s chores are done. The Campers split the chores: <b><span data-s="perCamper">3 or 4</span> each</b> <span data-s="playersNote">with 12 players</span>. Each Lurker gets a fake list just as long.</li>
+        <li><b>Your chores are secret, even from you.</b> An amber <b>“for you”</b> badge in that list, and on the <span class="ui">🗺 Map</span>, only shows which rooms yours are in. In each room, scan its QR code: tap <span class="ui">📷 Scan QR</span> in the game (or use your phone’s camera, or type the code under it). Then you see what to do there.</li>
+        <li><b>Do them:</b> every room with chores has a phone game, and the rest are that room’s own activities, photos and carries. Activities are for real: hold a plank, sing on the radio, dance by the fire. Tap <span class="ui">▶ Start</span>, keep going until the timer runs out, then tap <span class="ui">Done</span>.</li>
+        <li><b>Phone games</b> (Snake, Wordle, Blackjack and more) take about 2 min. <b>Lose one, or quit it, and there’s no second try:</b> the game moves to another room on the list, usually on another floor. Go find it.</li>
+        <li data-hide="clockOff"><b>Beat the clock.</b> The Campers have <b data-s="timeLimit">40 min</b>, counting down on every phone and on the TV. It only runs during play: Campfires and pauses stop it.</li>
+        <li><b>Campers</b> win by finishing every chore (the chore bar fills) or voting out every Lurker<span data-hide="clockOff">, before the clock runs out</span>.</li>
+        <li><b>Lurkers</b> blend in, fake chores, and kill Campers: a tap on the shoulder, then confirm the kill on their phone. They win when they catch up in numbers<span data-hide="stormOff">, or a storm goes unsecured</span><span data-hide="clockOff">, or the clock runs out</span>.</li>
         <li><b>Killed?</b> Your phone tells you. Sit or lie down right there, stay silent, and show your 3-digit body code.</li>
         <li><b>Found a body?</b> Type its code in the <span class="ui">Found a body?</span> box, tap <span class="ui">Report</span>, and shout <span class="say">“Campfire!”</span> Everyone walks to the Great Room.</li>
         <li><b>At the Campfire</b>, tap <span class="ui">I’m here</span>, talk for <span data-s="discussSeconds">3 min</span>, then vote: tap a name or Skip, then <span class="ui">Yes, vote</span>. Most votes (and more than Skip) is out. A tie means nobody.</li>
@@ -185,13 +189,15 @@
       <h2>The goal and the roles</h2>
       <div class="stats">
         <span class="stat">Lurkers: <b data-s="lurkers">2</b><span data-hide="lurkersKnown"> (1 if 6 or fewer play)</span></span>
-        <span class="stat">Chores each: <b data-s="choreTotal">6</b></span>
+        <span class="stat">Rooms with chores: <b data-s="rooms">12</b></span>
+        <span class="stat">Chores: <b data-s="choreTotal">36</b></span>
+        <span class="stat" data-hide="clockOff">Clock: <b data-s="timeLimit">40 min</b></span>
       </div>
       <div class="two">
         <div class="side c">
           <h3><span class="camper">Campers</span></h3>
           <ul>
-            <li>Do your chores around the house.</li>
+            <li>Do your share of the chores around the house<span data-hide="clockOff">, before the clock runs out</span>.</li>
             <li>Watch everyone. Remember who was where.</li>
             <li>Vote out the Lurkers at Campfires.</li>
           </ul>
@@ -199,7 +205,7 @@
         <div class="side l">
           <h3><span class="lurker">Lurkers</span></h3>
           <ul>
-            <li>Act like a Camper. You get a chore list too: do it anyway, it just never counts.</li>
+            <li>Act like a Camper. You get a fake chore list, as long as a Camper’s and in the same rooms: do it anyway, it just never counts.</li>
             <li>Kill Campers one by one<span data-hide="stormOff"> and start storms</span>.</li>
             <li>Your role card tells you who the other Lurker is (if there is one). Work together.</li>
           </ul>
@@ -222,7 +228,7 @@
         <li><b>Make sure you’ll hear the alarms.</b> Volume up (on newer iPhones the game plays even on silent; on older ones, turn the ringer on too), and the button at the bottom of the game page should say <span class="ui">🔊 Sound on</span>.</li>
         <li><b>Keep the game page open with the screen on.</b> During a game the bottom of the page shows <span class="ui">☀️ Screen stays on</span>: leave it like that. No such button? Set Auto-Lock to Never while you play. Your phone beeps for Campfires, storms, and photo and talk requests only while the game page is open and the screen is on, and iPhones never vibrate for it.</li>
         <li>Meet at the <b>Campfire</b>: the <b>Great Room, by the big fireplace</b>, where the TV is. The TV shows the chore bar, who’s out, Campfire timers and storms.</li>
-        <li>The host starts the game. Peek at your role, check which rooms your chores are in (<b>My rooms</b> or the <span class="ui">🗺 Map</span>), and spread out. No kills for the first <span data-s="startGrace">60 sec</span>, and no bell for the first 30 sec.</li>
+        <li>The host starts the game<span data-hide="clockOff"> and the clock starts counting down</span>. Peek at your role, check which rooms your chores are in (the “for you” badges in <b>Rooms with chores</b>, or the <span class="ui">🗺 Map</span>), and spread out. No kills for the first <span data-s="startGrace">60 sec</span>, and no bell for the first 30 sec.</li>
         <li>The first time you tap <span class="ui">📷 Scan QR</span>, your browser asks to use the camera: tap <span class="ui">Allow</span>.</li>
       </ol>
       <p class="muted">Want to skip a game? Switch on <span class="ui">Sit out the next game</span> in the lobby before the host starts.</p>
@@ -233,6 +239,7 @@
     <section class="sec" id="house">
       <h2>The house</h2>
       <p>Every station (a room, a spot outside, a game table or the radio) has a QR card with a 4-character code under it. <a href="#scan">Scan it</a> to open that station in the game. The main floor, upstairs and basement are on the <span class="ui">🗺 Map</span> in the game.</p>
+      <p>Each game, <b data-s="rooms" data-unit="room">12 rooms</b> of these, picked at random, <a href="#rooms">get the chores</a>. The rest have none that game (a carry can still be dropped off there). <span id="rooms-live" hidden>The ones marked <span class="tag chores inline">Chores</span> below have them this game.</span></p>
 
       <h3>Main floor</h3>
       <ul class="stations">
@@ -300,52 +307,59 @@
         <li><b>Type the code.</b> Enter the 4 characters printed under the QR, like <span class="code">K7QM</span>, in the <span class="ui">At a station?</span> box and tap <span class="ui">Go</span>.</li>
       </ol>
       <h3>The 🗺 Map</h3>
-      <p>Tap <span class="ui">🗺 Map</span> in the game (or a room in <b>My rooms</b>) for floor plans of the main floor, upstairs and the basement. Every station has a marker:</p>
+      <p>Tap <span class="ui">🗺 Map</span> in the game (or a room in <b>Rooms with chores</b>) for floor plans of the main floor, upstairs and the basement. Every station has a marker:</p>
       <ul>
         <li>a <b>number</b>: that many of your chores are there, still to do;</li>
         <li>a <b>✓</b>: your chores there are done;</li>
         <li>a plain dot: nothing for you there. 🔥 is the Campfire.</li>
       </ul>
-      <p>Tap a marker to see its name and where it is. The Dock, the Lakeshore and the Radio aren’t on the floor plans: they’re under the <span class="ui">Outside</span> tab. The map only shows your own chores, never anyone else’s.</p>
+      <p>A room with chores this game also shows how many of them are done, like <b>1/3</b>: that count is the same on every phone. Rooms with no chores this game are faded.</p>
+      <p>Tap a marker to see its name and where it is. The Dock, the Lakeshore and the Radio aren’t on the floor plans: they’re under the <span class="ui">Outside</span> tab. Your markers only show your own chores, never anyone else’s.</p>
     </section>
 
     <!-- ------------------------------------------------------------ chores -->
 
     <section class="sec" id="chores">
       <h2>Chores</h2>
-      <p>You get <span data-chores="and"><b data-s="taskCount" data-unit="phone game">2 phone games</b>, <b data-s="actCount" data-unit="activity">2 activities</b>, <b data-s="photoCount" data-unit="photo">1 photo</b> and <b data-s="carryCount" data-unit="carry">1 carry</b></span>, all over the house. Lurkers get a list too.</p>
+      <h3 id="rooms">Rooms with chores</h3>
+      <p>Each game, <b data-s="rooms" data-unit="room">12 rooms</b> (stations), picked at random, get <b data-s="choresPerRoom" data-unit="chore">3 chores</b> each: <b data-s="choreTotal" data-unit="chore">36 chores</b> in all. A new game picks new rooms and new chores. Every room with chores has at least one phone game; the rest are that room’s own activities, photos and carries, from the lists below.</p>
+      <p><b>Every phone lists this game’s rooms</b> under <b>Rooms with chores</b> (and on the <span class="ui">🗺 Map</span>), with how many of each room’s chores are done. That’s all anyone sees: never what the chores are, or whose they are.</p>
+      <ul>
+        <li>The Campers split all the chores evenly: <b><span data-s="perCamper">3 or 4</span> each</b> <span data-s="playersNote">with 12 players</span>, spread over the rooms.</li>
+        <li>Each Lurker gets a <b>fake list</b> just as long, from the same rooms. Lurkers’ chores never count, and never show in a room’s count.</li>
+      </ul>
 
       <h3>Secret until you get there</h3>
-      <p>At the start, <b>My rooms</b> only tells you <b>which rooms</b> you have chores in, not what they are. The <span class="ui">🗺 Map</span> marks the same rooms. Go to one and scan its QR code (any of <a href="#scan">the three ways</a>): your chores there appear, and you can do them right away. One room can hold more than one of your chores. As you go, <b>My rooms</b> and the map show which rooms you’ve finished (✓).</p>
+      <p>At the start, the amber <b>“for you”</b> badges in <b>Rooms with chores</b> only tell you <b>which rooms</b> you have chores in, not what they are. The <span class="ui">🗺 Map</span> marks the same rooms. Go to one and scan its QR code (any of <a href="#scan">the three ways</a>): your chores there appear, and you can do them right away. One room can hold more than one of your chores. As you go, the list and the map show where yours are done (✓).</p>
       <ul>
-        <li data-hide="carryOff">A carry shows up at its pick-up room. Once you’ve picked it up, the list says where to take it.</li>
-        <li data-hide="actOff">The talk chore is never secret: it’s on your list from the start, and you do it anywhere.</li>
-        <li data-hide="taskOff">A phone game you lose moves to a new room and is secret again until you scan that room.</li>
+        <li>A carry is one of its pick-up room’s chores. Once you’ve picked it up, the list says where to take it, and that room doesn’t have to be on the list.</li>
+        <li>The talk chore is one of the Campfire’s chores, but it’s never secret: it’s on your list from the start, and you do it anywhere.</li>
+        <li>A phone game you lose moves to another room on the list and is secret again until you scan that room.</li>
         <li>Scanned a room with nothing for you? The game says so. Nobody else can see your chores, or which rooms you’ve scanned.</li>
       </ul>
 
-      <div data-hide="taskOff">
+      <div>
         <h3>Phone games</h3>
-        <p>Seven games, each about 2 minutes, played on your own phone in the room. Scan the room, tap the game, and win it: that’s the chore done.</p>
+        <p>Seven games, each about 2 minutes, played on your own phone in the room. Each room with chores gets at least one, picked at random, so any game can turn up in any room. Scan the room, tap the game, and win it: that’s the chore done.</p>
         <div class="callout red">
-          <p><b>Lose it and you can’t start over.</b> The game moves to another room, usually on another floor, and turns secret again. <b>My rooms</b> and the <span class="ui">🗺 Map</span> show the new room: go there, scan it, and play from the start.</p>
+          <p><b>Lose it and you can’t start over.</b> The game moves to another room with chores this game, usually on another floor, and turns secret again. <b>Rooms with chores</b> and the <span class="ui">🗺 Map</span> show the new room: go there, scan it, and play from the start.</p>
           <p><b>Quitting counts as losing.</b> Tap <span class="ui">Quit</span> in a game you’ve started and the app asks: <b>“Quit? It counts as a loss and this game moves to another room.”</b> Reloading the page in the middle of a game counts as quitting too.</p>
           <p>A Campfire, a storm or a pause that closes your game is <b>not</b> a loss: the game stays put, so start it again in the same room.</p>
         </div>
-        <p>Where each game starts (one of two rooms), how to win it, and how you lose it. A moved game can turn up anywhere but the Campfire, outside included.</p>
+        <p>How to win each game, and how you lose it. A lost game moves to another room on this game’s list (never the Campfire), outside included.</p>
         <ul class="stations acts">
-          <li data-needs-any="up-east screened-patio"><span class="name">Hold the line</span><span class="tag time">2 min</span><span class="tag lose">Lose: let go</span><span class="where"><b><span data-room="up-east">Upstairs Hall</span> · <span data-room="screened-patio">Screened Patio</span>:</b> hold the button down for 2 minutes. Let go for more than a second and you lose.</span></li>
-          <li data-needs-any="up-west b-office"><span class="name">Wordle</span><span class="tag time">6 tries</span><span class="tag lose">Lose: 6 misses</span><span class="where"><b><span data-room="up-west">Upstairs Landing</span> · <span data-room="b-office">Basement Office</span>:</b> guess the 5-letter word in 6 tries. Six wrong guesses and you lose.</span></li>
-          <li data-needs-any="dining bar"><span class="name">Make 24</span><span class="tag time">3 hands</span><span class="tag safe">Can’t lose</span><span class="where"><b><span data-room="dining">Dining Room</span> · <span data-room="bar">Basement Kitchen</span>:</b> make 24 from four cards with + − × ÷. Solve 3 hands. Stuck? <span class="ui">Skip hand</span> deals a new hand (skipped hands don’t count).</span></li>
-          <li data-needs-any="sunroom media"><span class="name">Snake</span><span class="tag time">12 apples</span><span class="tag lose">Lose: crash</span><span class="where"><b><span data-room="sunroom">Sunroom</span> · <span data-room="media">Media Room</span>:</b> eat 12 apples. Hit a wall or yourself and you lose.</span></li>
-          <li data-needs-any="east-living den"><span class="name">Blackjack</span><span class="tag time">3 wins</span><span class="tag lose">Lose: 3 losses</span><span class="where"><b><span data-room="east-living">East Living Room</span> · <span data-room="den">Basement Living Room</span>:</b> beat the dealer 3 times before the dealer beats you 3 times.</span></li>
-          <li data-needs-any="kitchen laundry"><span class="name">Tap 1 to 50</span><span class="tag time">3 sec freeze</span><span class="tag safe">Can’t lose</span><span class="where"><b><span data-room="kitchen">Kitchen</span> · <span data-room="laundry">Laundry Room</span>:</b> tap the numbers 1 to 50 in order. A wrong tap freezes you for 3 sec.</span></li>
-          <li data-needs-any="office foyer"><span class="name">Crack the code</span><span class="tag time">2 digits</span><span class="tag safe">Can’t lose</span><span class="where"><b><span data-room="office">Office</span> · <span data-room="foyer">Foyer</span>:</b> brute-force the 2-digit code (the Wi-Fi password, or the lockbox), one try at a time. It just takes tries.</span></li>
+          <li><span class="name">Hold the line</span><span class="tag time">2 min</span><span class="tag lose">Lose: let go</span><span class="where">Hold the button down for 2 minutes. Let go for more than a second and you lose.</span></li>
+          <li><span class="name">Wordle</span><span class="tag time">6 tries</span><span class="tag lose">Lose: 6 misses</span><span class="where">Guess the 5-letter word in 6 tries. Six wrong guesses and you lose.</span></li>
+          <li><span class="name">Make 24</span><span class="tag time">3 hands</span><span class="tag safe">Can’t lose</span><span class="where">Make 24 from four cards with + − × ÷. Solve 3 hands. Stuck? <span class="ui">Skip hand</span> deals a new hand (skipped hands don’t count).</span></li>
+          <li><span class="name">Snake</span><span class="tag time">12 apples</span><span class="tag lose">Lose: crash</span><span class="where">Eat 12 apples. Hit a wall or yourself and you lose.</span></li>
+          <li><span class="name">Blackjack</span><span class="tag time">3 wins</span><span class="tag lose">Lose: 3 losses</span><span class="where">Beat the dealer 3 times before the dealer beats you 3 times.</span></li>
+          <li><span class="name">Tap 1 to 50</span><span class="tag time">3 sec freeze</span><span class="tag safe">Can’t lose</span><span class="where">Tap the numbers 1 to 50 in order. A wrong tap freezes you for 3 sec.</span></li>
+          <li><span class="name">Crack the code</span><span class="tag time">2 digits</span><span class="tag safe">Can’t lose</span><span class="where">Brute-force the 2-digit code, one try at a time. It just takes tries.</span></li>
         </ul>
         <div class="callout amber"><p><b>Eyes up.</b> Two minutes staring at your phone is two minutes you’re not watching your back.</p></div>
       </div>
 
-      <div data-hide="actOff">
+      <div>
         <h3>Activities</h3>
         <ol>
           <li>Go to the station and scan its QR code.</li>
@@ -405,10 +419,10 @@
         <ul class="stations acts">
           <li><span class="name">Catch up with 3 people</span><span class="tag time">3 yeses</span><span class="where"><b>No station:</b> ask 3 different players a question, face to face. See below.</span></li>
         </ul>
-        <p class="muted">Each activity goes to at most 2 players per game (3 for the dance, 4 for the talk chore), so not every one shows up every game. Someone already there? Wait your turn, or do another chore and come back.</p>
+        <p class="muted">An activity only comes up when its room is one of this game’s rooms with chores, and not always then, so not every one shows up every game. Someone already there? Wait your turn, or do another chore and come back.</p>
 
         <h3>The talk chore</h3>
-        <p>One of your activities can be <b>Catch up with 3 people</b>, which you do anywhere, with no scan. Tap <span class="ui">💬 Talk to someone</span> on that chore in <b>My rooms</b> (under 💬 Anywhere) and pick a living player. Your phone gives you a question for them, like “What’s your go-to karaoke song?” Find them and ask it, face to face.</p>
+        <p>When the Campfire is one of this game’s rooms, one of its chores can be <b>Catch up with 3 people</b>, which you do anywhere, with no scan. Tap <span class="ui">💬 Talk to someone</span> on that chore in <b>Rooms with chores</b> (under 💬 Anywhere) and pick a living player. Your phone gives you a question for them, like “What’s your go-to karaoke song?” Find them and ask it, face to face.</p>
         <ul>
           <li>Their phone asks them: <b>“Did <i>your name</i> just ask you: …?”</b> When they tap <span class="ui">Yes</span>, that’s one. Three different people saying yes finishes the chore, and the chore shows how many you have.</li>
           <li>One ask at a time: picking someone new replaces the one still waiting. Someone who already said yes doesn’t count twice.</li>
@@ -416,7 +430,7 @@
         </ul>
       </div>
 
-      <div data-hide="photoOff">
+      <div>
         <h3>Photos</h3>
         <p>Scan the station, tap the photo chore, then <span class="ui">📷 Open the camera</span>, take the shot, and tap <span class="ui">Send photo</span>. Photos marked <span class="tag pair inline">With a player</span> need another living player in the shot: pick them under “Who’s in it with you?”, and they tap <span class="ui">Yes</span> on their own phone. It only counts once they do. If they say No, take it again. No answer? Go back to the station and tap <span class="ui">Retake with someone else</span>.</p>
         <ul class="stations acts">
@@ -431,7 +445,7 @@
         <p>Every photo ends up in the <span class="ui">🖼 Photos</span> gallery and on the end screen, so make it a good one.</p>
       </div>
 
-      <div data-hide="carryOff">
+      <div>
         <h3>Carries</h3>
         <p>Scan the pick-up station and tap <span class="ui">📦 Pick up …</span> (the item is imaginary), walk it over, then scan the drop-off station and tap <span class="ui">📦 Drop off …</span>.</p>
         <ul class="stations acts">
@@ -448,9 +462,9 @@
       <p>Took a photo with someone, or got asked their question? Your phone pops up a check: <b>“Were you in this photo with …?”</b> or <b>“Did … just ask you: …?”</b> Tap <span class="ui">Yes</span> only if it really happened, <span class="ui">No</span> if it didn’t. Anyone alive can be asked, Lurkers included. Ghosts can’t.</p>
 
       <h3>The chore bar</h3>
-      <p>The bar on every phone and on the TV fills as Campers finish chores. When it’s full, the Campers win. Lurkers’ chores never count, and the app never says whose chores counted.</p>
-      <p data-show="barMeetings" hidden><b>This game the bar only moves at Campfires</b>, so you can’t watch it to catch a fake chore.</p>
-      <p class="muted">No chores during a Campfire or while the game is paused. A Campfire, a storm or a pause can close a <span data-hide="taskOff">game or </span>activity you’re in the middle of<span data-hide="taskOff"> (that never counts as a loss)</span>: start it again afterwards, in the same room.</p>
+      <p>The bar on every phone and on the TV fills as Campers finish chores. When it’s full (all <span data-s="choreTotal" data-unit="chore">36 chores</span> done), the Campers win<span data-hide="clockOff">, as long as the clock hasn’t run out</span>. Lurkers’ chores never count, and the app never says whose chores counted.</p>
+      <p data-show="barMeetings" hidden><b>This game the bar only moves at Campfires.</b></p>
+      <p class="muted">No chores during a Campfire or while the game is paused. A Campfire, a storm or a pause can close a game or activity you’re in the middle of (that never counts as a loss): start it again afterwards, in the same room.</p>
     </section>
 
     <!-- ------------------------------------------------------------ talking -->
@@ -514,7 +528,7 @@
 
     <section class="sec" id="campfire">
       <h2>Campfire</h2>
-      <p>A report or the bell starts a Campfire for everyone: phones flash and sound an alarm, and so does the TV. Stop what you’re doing (chores freeze anyway) and walk to the Great Room.</p>
+      <p>A report or the bell starts a Campfire for everyone: phones flash and sound an alarm, and so does the TV. Stop what you’re doing (chores freeze anyway<span data-hide="clockOff">, and so does the clock</span>) and walk to the Great Room.</p>
       <ol class="stages">
         <li><div class="stage"><b>1. Gather</b> <span data-s="gatherSeconds">60 sec</span></div>Come to the Great Room and tap <span class="ui">I’m here</span>. Moves on early once every living player is in.</li>
         <li><div class="stage"><b>2. Discuss</b> <span data-s="discussSeconds">3 min</span></div>Phones and the TV show who called it, whose body, and everyone killed since the last Campfire. Talk it out.</li>
@@ -534,6 +548,7 @@
         <li data-hide="revealRole"><b>Roles stay hidden:</b> nobody learns whether the player voted out was a Camper or a Lurker.</li>
         <li data-show="revealRole" hidden><b>Roles are shown this game:</b> everyone learns whether the player voted out was a Camper or a Lurker.</li>
         <li>Every body is revealed at a Campfire, found or not.</li>
+        <li data-hide="clockOff">The clock stops from the moment a Campfire starts until the game goes on, so a Campfire never costs the Campers time.</li>
         <li>Afterwards: no kills for <span data-s="killAfterMeeting">90 sec</span>, no bell for 30 sec<span data-hide="stormOff">, no storm for 60 sec</span>.</li>
       </ul>
     </section>
@@ -547,9 +562,9 @@
         <li>Put on a <b>ghost marker</b> (a bandana or glow stick from the host) so everyone can tell.</li>
         <li><b>Stay silent.</b> No talking, texting, pointing or faces. You know things. Keep them to yourself.</li>
         <li><b>Keep doing chores.</b> A Camper ghost’s chores still fill the bar. You still scan rooms to see what’s there.</li>
-        <li><span data-hide="taskOff">Phone games, photos</span><span data-show="taskOff" hidden>Photos</span> and carries work as usual, just silently<span data-hide="taskOff"> (lose a phone game and it still moves)</span>. Your photo chores no longer need a partner.</li>
-        <li data-hide="actOff"><b>Silent activities:</b> anything <span class="tag voice inline">Out loud</span> (the radio song and shout-out, the impression, the movie scene) you do without a sound: lip-sync or mime it until the timer runs out. Every other activity works as usual, quietly.</li>
-        <li data-hide="actOff"><b>Silent talk chore:</b> <b>Catch up with 3 people</b> becomes a 30 sec timer (<span class="ui">👋 Wave at players</span>): silently wave at 3 different players while it runs. Nobody has to confirm.</li>
+        <li>Phone games, photos and carries work as usual, just silently (lose a phone game and it still moves). Your photo chores no longer need a partner.</li>
+        <li><b>Silent activities:</b> anything <span class="tag voice inline">Out loud</span> (the radio song and shout-out, the impression, the movie scene) you do without a sound: lip-sync or mime it until the timer runs out. Every other activity works as usual, quietly.</li>
+        <li><b>Silent talk chore:</b> <b>Catch up with 3 people</b> becomes a 30 sec timer (<span class="ui">👋 Wave at players</span>): silently wave at 3 different players while it runs. Nobody has to confirm.</li>
         <li>Ghosts can’t vote, report bodies, ring the bell, secure a storm, be in someone’s photo, or answer someone’s talk question.</li>
         <li>You can watch Campfires. Quietly.</li>
         <li data-hide="stormOff">A Lurker ghost can still start storms, but can’t kill.</li>
@@ -576,6 +591,21 @@
       <div class="callout amber"><p>Shout who’s going where. Walk fast, but don’t run.</p></div>
     </section>
 
+    <!-- ------------------------------------------------------------ the clock -->
+
+    <section class="sec" id="clock">
+      <h2>The clock</h2>
+      <p data-show="clockOff" hidden class="callout"><b>No time limit this game.</b> The Campers can take as long as they need.</p>
+      <div data-hide="clockOff">
+        <p>The Campers have <b data-s="timeLimit">40 min</b> of play to get every chore done. The countdown is on every phone and on the TV.</p>
+        <ul>
+          <li><b>It only runs during play.</b> A Campfire stops it, from the moment it starts until the game goes on, and so does a pause. Then it carries on from where it stopped.</li>
+          <li data-hide="stormOff">A storm doesn’t stop it.</li>
+          <li><b>It runs out: the Lurkers win</b>, even with one chore left.</li>
+        </ul>
+      </div>
+    </section>
+
     <!-- ------------------------------------------------------------ winning -->
 
     <section class="sec" id="win">
@@ -585,14 +615,15 @@
           <h3><span class="camper">Campers</span> win when</h3>
           <ul>
             <li>every Lurker has been voted out, <b>or</b></li>
-            <li>the chore bar is full.</li>
+            <li>all <span data-s="choreTotal" data-unit="chore">36 chores</span> are done: the chore bar is full<span data-hide="clockOff">, before the clock runs out</span></li>
           </ul>
         </div>
         <div class="side l">
           <h3><span class="lurker">Lurkers</span> win when</h3>
           <ul>
-            <li>living Lurkers equal or outnumber living Campers (say, 2 Lurkers and 2 Campers left)<span data-hide="stormOff">, <b>or</b></span></li>
-            <li data-hide="stormOff">a storm runs out of time.</li>
+            <li>living Lurkers equal or outnumber living Campers (say, 2 Lurkers and 2 Campers left)</li>
+            <li data-hide="stormOff"><b>or</b> a storm runs out of time</li>
+            <li data-hide="clockOff"><b>or</b> the clock runs out before the chores are done</li>
           </ul>
         </div>
       </div>
@@ -608,14 +639,14 @@
         <li><b>Eyes up when you move.</b> Play phone games standing or sitting still, never while walking or on the stairs.</li>
         <li><b>Shoulder taps only.</b> A light tap. Never push, grab, tackle or jump-scare anyone. No taps on the stairs, near the water, or mid-swing.</li>
         <li><b>Golf sim and ping pong:</b> look around before you swing, and give whoever’s playing room.</li>
-        <li data-hide="actOff"><b>Activities at your own pace.</b> Push-ups on your knees are fine, and nobody has to do anything that hurts. Skip stones from the shore only, away from people.</li>
+        <li><b>Activities at your own pace.</b> Push-ups on your knees are fine, and nobody has to do anything that hurts. Skip stones from the shore only, away from people.</li>
         <li><b>Stay out of the water.</b> On the dock, keep away from the edges and never get on a boat.</li>
         <li><b>Phone in your hand, not your pocket,</b> near the water. Pockets are how phones end up in the lake.</li>
         <li><b>No unsafe hiding:</b> no closets, cabinets, under furniture, on roofs, or anywhere you could get stuck or hurt. Don’t lock or block doors.</li>
         <li><b>Out of bounds stays out:</b> bedrooms, bathrooms, the water, the road, cars, garages.</li>
       </ul>
       <div class="callout red">
-        <p><b>Shout <span class="say">“PAUSE”</span> for anything real:</b> someone gets hurt, something spills or breaks, a phone goes in the water, someone’s at the door. Everyone freezes, the host pauses the app (all timers and cooldowns stop, and nobody can do anything until it’s back on), and we pick up again when it’s sorted.</p>
+        <p><b>Shout <span class="say">“PAUSE”</span> for anything real:</b> someone gets hurt, something spills or breaks, a phone goes in the water, someone’s at the door. Everyone freezes, the host pauses the app (all timers and cooldowns stop<span data-hide="clockOff">, the clock too</span>, and nobody can do anything until it’s back on), and we pick up again when it’s sorted.</p>
       </div>
     </section>
 
@@ -627,11 +658,12 @@
       <ul>
         <li>Move in pairs or small groups. It’s harder to get tapped with witnesses around.</li>
         <li>Remember who you saw where, and when. Campfires are won with alibis.</li>
-        <li>Watching someone do a chore proves nothing: Lurkers have chore lists too. Same for photos and talk questions. Being in someone’s photo, or answering their question, doesn’t clear them.</li>
-        <li>Nobody can see anyone’s chores, not even their own before they scan. “I had a chore in the kitchen” is a claim, not proof.</li>
-        <li data-hide="taskOff">Playing a phone game? Do it near someone, and look up now and then.</li>
-        <li data-hide="taskOff">Lost a phone game? Its new room is often on another floor. Don’t make that walk alone if you can help it.</li>
-        <li data-hide="actOff">Hear someone on the radio? Right then, you know exactly where they are.</li>
+        <li>Watching someone do a chore proves little: Lurkers have chore lists too, in the same rooms. Same for photos and talk questions. Being in someone’s photo, or answering their question, doesn’t clear them.</li>
+        <li>Nobody can see anyone’s chores, not even their own before they scan. “I had a chore in the kitchen” is a claim, not proof. But a room that isn’t on this game’s list has no chores at all (only carry drop-offs).</li>
+        <li data-hide="clockOff">Mind the clock: <span data-s="timeLimit">40 min</span> goes fast. Plan a route through your rooms, a floor at a time.</li>
+        <li>Playing a phone game? Do it near someone, and look up now and then.</li>
+        <li>Lost a phone game? Its new room is often on another floor. Don’t make that walk alone if you can help it.</li>
+        <li>Hear someone on the radio? Right then, you know exactly where they are.</li>
         <li>Save your bell for a real lead. You can only ring it <span data-s="emergencies">once</span>.</li>
         <li data-hide="stormOff">Storm? Decide in seconds who goes up and who goes down, and say it out loud.</li>
         <li>Not sure? Vote Skip. Voting out a Camper helps the Lurkers.</li>
@@ -641,9 +673,11 @@
       <ul>
         <li>Check that your kill is ready (names not greyed out) before you tap. A tap you can’t confirm gives you away.</li>
         <li>Kill where nobody’s looking, then walk off calmly. Or “find” the body and report it yourself.</li>
-        <li>Do your chores, for real. They don’t count, but a plank in the hallway is a great alibi. Scan rooms the way a Camper would.</li>
-        <li data-hide="taskOff">A Camper alone, head down in a 2-minute phone game, isn’t watching the door. One who just lost a game is about to cross the house, maybe alone.</li>
-        <li data-hide="actOff">Got the talk chore? It’s the perfect excuse to walk up to anyone.</li>
+        <li>Do your chores, for real. They don’t count (a room’s count never moves for them), but a plank in the hallway is a great alibi. Scan rooms the way a Camper would.</li>
+        <li>Every phone shows which rooms still have chores to do. That’s where the Campers are headed.</li>
+        <li data-hide="clockOff">Time is on your side: if the clock runs out, you win. A Campfire stops the clock, though, so calling one never runs it down.</li>
+        <li>A Camper alone, head down in a 2-minute phone game, isn’t watching the door. One who just lost a game is about to cross the house, maybe alone.</li>
+        <li>Got the talk chore? It’s the perfect excuse to walk up to anyone.</li>
         <li data-hide="stormOff">A storm sends Campers to opposite ends of the house, alone. You can still kill during a storm, but a reported body ends it.</li>
         <li>Talk. Accuse, defend, vouch. For your partner, or against them if it saves you.</li>
         <li>Don’t stick to your partner all game. Two people who always vouch for each other look guilty.</li>
@@ -661,7 +695,15 @@
       </details>
       <details class="faq">
         <summary>Why doesn’t my chore list say what my chores are?</summary>
-        <p>That’s the point: you find out in the room. My rooms and the 🗺 Map show which rooms to go to. Scan a room’s QR code and your chores there appear.</p>
+        <p>That’s the point: you find out in the room. The “for you” badges in Rooms with chores and the 🗺 Map show which rooms to go to. Scan a room’s QR code and your chores there appear.</p>
+      </details>
+      <details class="faq">
+        <summary>Which rooms have chores this game?</summary>
+        <p>Every phone shows them under Rooms with chores: <span data-s="rooms" data-unit="room">12 rooms</span>, picked at random each game, with how many of each room’s chores are done. The amber “for you” badges (and the 🗺 Map) show which of them your own chores are in.</p>
+      </details>
+      <details class="faq" data-hide="clockOff">
+        <summary>What happens when the clock runs out?</summary>
+        <p>The Lurkers win, even if only one chore is left. The clock stops during Campfires and pauses, so a Campfire never costs the Campers time.</p>
       </details>
       <details class="faq">
         <summary>The QR code won’t scan.</summary>
@@ -683,35 +725,35 @@
         <summary>My phone says I’m dead, but nobody tapped me.</summary>
         <p>Press “I wasn’t tapped!” within <span data-s="undoSeconds">20 sec</span>. It only works before a Campfire starts.</p>
       </details>
-      <details class="faq" data-hide="taskOff">
+      <details class="faq">
         <summary>I lost a phone game. Can I try again?</summary>
-        <p>Not in that room. A lost game moves to another room, usually on another floor, and turns secret again. My rooms and the 🗺 Map show where it went: go there, scan the room, and play it from the start. You can lose it there too, and it moves again.</p>
+        <p>Not in that room. A lost game moves to another room with chores this game, usually on another floor, and turns secret again. Rooms with chores and the 🗺 Map show where it went: go there, scan the room, and play it from the start. You can lose it there too, and it moves again.</p>
       </details>
-      <details class="faq" data-hide="taskOff">
+      <details class="faq">
         <summary>Can I quit a phone game halfway?</summary>
         <p>You can, but it counts as losing: tapping <span class="ui">Quit</span> asks “Quit? It counts as a loss and this game moves to another room.” Tap <span class="ui">Cancel</span> there and you’re back in the game. Reloading the page mid-game counts as quitting too.</p>
       </details>
-      <details class="faq" data-hide="taskOff">
+      <details class="faq">
         <summary>A Campfire started in the middle of my phone game.</summary>
         <p>The game closes, and so does any activity you were doing. That’s not a loss: nothing moves. After the Campfire, go back to the same room and start it again. Same if a storm or a pause closes it.</p>
       </details>
-      <details class="faq" data-hide="photoOff">
+      <details class="faq">
         <summary>My photo partner never answered.</summary>
         <p>Maybe their phone is asleep, or they tapped “Not now” (they can still answer later from their game page). Whatever the reason, go back to the station and tap “Retake with someone else”. The chore only counts once your partner taps Yes.</p>
       </details>
-      <details class="faq" data-hide="actOff">
+      <details class="faq">
         <summary>Do I really have to sing?</summary>
         <p>Yes, that’s the chore, and the whole house is listening. Everything is on the honor system, but the timer won’t let you skip ahead. Ghosts lip-sync instead.</p>
       </details>
-      <details class="faq" data-hide="actOff">
+      <details class="faq">
         <summary>Can I tap Done without doing the activity?</summary>
         <p>The app can’t stop you, but that’s cheating. Honor system: do the whole thing, then tap Done. Can’t do one (a sore back, say)? Do the gentlest version you can, like push-ups on your knees.</p>
       </details>
-      <details class="faq" data-hide="actOff">
+      <details class="faq">
         <summary>Someone’s already at the radio, the table or the sim.</summary>
-        <p>Wait your turn, or go do another chore and come back. Only a few players get each activity per game.</p>
+        <p>Wait your turn, or go do another chore and come back. A room’s chores go to different players, and a Lurker’s fake list can have the same one.</p>
       </details>
-      <details class="faq" data-hide="actOff">
+      <details class="faq">
         <summary>Nobody’s saying yes to my talk question.</summary>
         <p>Their phone may be asleep: ask them to open the game page. Or pick someone else: a new ask replaces the one still waiting. You need 3 different people.</p>
       </details>
@@ -757,7 +799,7 @@
       </details>
       <details class="faq">
         <summary>Who’s the host?</summary>
-        <p>Whoever signed in as host: open <a class="site" href="/lake/admin">ascend-exchange.fly.dev/lake/admin</a>, enter the admin password, and tap “▶ Start the game” in the lobby. The host can play too, on the same phone. The host can start, pause and end games, move a Campfire to its next stage early, sit players out or remove them, and change the settings (timers, chores, storms) between games, never during one. The game app always shows the current numbers.</p>
+        <p>Whoever signed in as host: open <a class="site" href="/lake/admin">ascend-exchange.fly.dev/lake/admin</a>, enter the admin password, and tap “▶ Start the game” in the lobby. The host can play too, on the same phone. The host can start, pause and end games, move a Campfire to its next stage early, sit players out or remove them, and change the settings (how many rooms get chores, chores per room, the time limit, timers, storms) between games, never during one. The game app always shows the current numbers.</p>
       </details>
     </section>
 
@@ -767,21 +809,25 @@
       <h2>All the numbers</h2>
       <table class="nums">
         <tr><td>Lurkers<span class="small muted" data-hide="lurkersKnown"> (1 if 6 or fewer play)</span></td><td class="v" data-s="lurkers">2</td></tr>
-        <tr><td>Chores each</td><td class="v"><span data-chores="list"><span data-s="taskCount" data-unit="phone game">2 phone games</span>, <span data-s="actCount" data-unit="activity">2 activities</span>, <span data-s="photoCount" data-unit="photo">1 photo</span>, <span data-s="carryCount" data-unit="carry">1 carry</span></span></td></tr>
-        <tr data-hide="taskOff"><td>Phone games</td><td class="v">about 2 min each</td></tr>
-        <tr data-hide="taskOff"><td>A lost (or quit) phone game</td><td class="v">moves to another room</td></tr>
-        <tr data-hide="taskOff"><td>Hold the line: hold for</td><td class="v">2 min</td></tr>
-        <tr data-hide="taskOff"><td>Hold the line: let go longer than this and you lose</td><td class="v">1 sec</td></tr>
-        <tr data-hide="taskOff"><td>Wordle: wrong guesses and you lose</td><td class="v">6</td></tr>
-        <tr data-hide="taskOff"><td>Make 24: hands to solve (Skip any, can’t lose)</td><td class="v">3</td></tr>
-        <tr data-hide="taskOff"><td>Snake: apples to eat (one crash and you lose)</td><td class="v">12</td></tr>
-        <tr data-hide="taskOff"><td>Blackjack: wins needed, before this many losses</td><td class="v">3</td></tr>
-        <tr data-hide="taskOff"><td>Tap 1 to 50: freeze after a wrong tap (can’t lose)</td><td class="v">3 sec</td></tr>
-        <tr data-hide="taskOff"><td>Crack the code: digits (can’t lose)</td><td class="v">2</td></tr>
-        <tr data-hide="actOff"><td>Activity timers</td><td class="v">15 to 60 sec</td></tr>
-        <tr data-hide="actOff"><td>Players per activity, per game</td><td class="v">2 (dance: 3, talk: 4)</td></tr>
-        <tr data-hide="actOff"><td>Talk chore</td><td class="v">3 people</td></tr>
-        <tr data-hide="actOff"><td>Talk chore as a ghost (waving)</td><td class="v">30 sec</td></tr>
+        <tr><td>Rooms with chores (picked at random each game)</td><td class="v" data-s="rooms">12</td></tr>
+        <tr><td>Chores per room (at least one a phone game)</td><td class="v" data-s="choresPerRoom">3</td></tr>
+        <tr><td>Chores in all</td><td class="v" data-s="choreTotal">36</td></tr>
+        <tr><td>Chores per Camper <span class="small muted">(<span data-s="playersNote">with 12 players</span>)</span></td><td class="v" data-s="perCamper">3 or 4</td></tr>
+        <tr><td>A Lurker’s fake list</td><td class="v">as long as a Camper’s</td></tr>
+        <tr><td>Time limit (play time only: Campfires and pauses stop the clock)</td><td class="v" data-s="timeLimit">40 min</td></tr>
+        <tr><td>Phone games</td><td class="v">about 2 min each</td></tr>
+        <tr><td>A lost (or quit) phone game</td><td class="v">moves to another room on the list</td></tr>
+        <tr><td>Hold the line: hold for</td><td class="v">2 min</td></tr>
+        <tr><td>Hold the line: let go longer than this and you lose</td><td class="v">1 sec</td></tr>
+        <tr><td>Wordle: wrong guesses and you lose</td><td class="v">6</td></tr>
+        <tr><td>Make 24: hands to solve (Skip any, can’t lose)</td><td class="v">3</td></tr>
+        <tr><td>Snake: apples to eat (one crash and you lose)</td><td class="v">12</td></tr>
+        <tr><td>Blackjack: wins needed, before this many losses</td><td class="v">3</td></tr>
+        <tr><td>Tap 1 to 50: freeze after a wrong tap (can’t lose)</td><td class="v">3 sec</td></tr>
+        <tr><td>Crack the code: digits (can’t lose)</td><td class="v">2</td></tr>
+        <tr><td>Activity timers</td><td class="v">15 to 60 sec</td></tr>
+        <tr><td>Talk chore</td><td class="v">3 people</td></tr>
+        <tr><td>Talk chore as a ghost (waving)</td><td class="v">30 sec</td></tr>
         <tr><td>No kills at the start</td><td class="v" data-s="startGrace">60 sec</td></tr>
         <tr><td>Time between kills</td><td class="v" data-s="killCooldown">2½ min</td></tr>
         <tr><td>No kills after a Campfire</td><td class="v" data-s="killAfterMeeting">90 sec</td></tr>
@@ -810,10 +856,9 @@
     /* global io */
     /**
      * The page reads fine on its own with the default settings written in. When the game server answers, swap in the
-     * host's live settings: numbers ([data-s]), chore lists that leave out kinds set to 0 ([data-chores]), on/off
-     * sentences ([data-show] / [data-hide]), switched-off stations
-     * (and the chores at them: [data-needs] needs every station listed, [data-needs-any] at least one, and a
-     * [data-room] name is struck through) and the two storm stations.
+     * host's live settings and this game's numbers: [data-s] values (rooms with chores, chores per room, the time limit,
+     * timers), on/off sentences ([data-show] / [data-hide]), switched-off stations (and the chores at them: [data-needs]
+     * needs every station listed), this game's rooms with chores, and the two storm stations.
      */
     (() => {
       'use strict';
@@ -831,29 +876,11 @@
         return `${m} min ${s} sec`;
       }
       const plural = (n, unit) => (n === 1 ? unit : unit.endsWith('y') ? `${unit.slice(0, -1)}ies` : `${unit}s`);
-      const COUNTS = new Set(['lurkers', 'taskCount', 'actCount', 'photoCount', 'carryCount', 'choreTotal']);
-      const CHORE_COUNTS = ['taskCount', 'actCount', 'photoCount', 'carryCount'];
-      const CHORE_UNITS = { taskCount: 'phone game', actCount: 'activity', photoCount: 'photo', carryCount: 'carry' };
-
-      /** "2 phone games, 2 activities and 1 carry": only the kinds dealt this game ([data-chores="and"], or "list" for commas only). */
-      function choreList(el, set) {
-        el.dataset.tag ??= el.firstElementChild?.tagName.toLowerCase() ?? 'span';
-        const parts = CHORE_COUNTS.filter((key) => set[key] > 0).map((key) => {
-          const part = document.createElement(el.dataset.tag);
-          part.textContent = format(key, set[key], CHORE_UNITS[key]);
-          return part;
-        });
-        if (!parts.length) return el.replaceChildren('no chores');
-        const nodes = [];
-        parts.forEach((part, i) => {
-          if (i) nodes.push(i === parts.length - 1 && el.dataset.chores === 'and' ? ' and ' : ', ');
-          nodes.push(part);
-        });
-        el.replaceChildren(...nodes);
-      }
+      const COUNTS = new Set(['lurkers', 'rooms', 'choresPerRoom', 'choreTotal']);
 
       function format(key, v, unit) {
         if (key === 'emergencies') return v === 1 ? 'once' : v === 2 ? 'twice' : `${v} times`;
+        if (key === 'timeLimit') return v > 0 ? `${v} min` : 'no limit'; // minutes, 0 = no clock
         if (COUNTS.has(key)) return unit ? `${v} ${plural(v, unit)}` : String(v);
         return dur(v);
       }
@@ -866,31 +893,49 @@
         return n ? (n <= 6 ? 1 : 2) : null;
       }
 
+      /**
+       * Rooms with chores, chores in all, and each Camper's share: this game's deal, or in the lobby what a game would
+       * deal right now (the rooms can't outnumber the switched-on stations). The share is for the players in the game
+       * or signed up for the next one, or for 12 players when there aren't enough yet.
+       */
+      function chores(st) {
+        const set = st.settings;
+        if (!Number.isFinite(set.rooms) || !Number.isFinite(set.choresPerRoom)) return {};
+        const live = Array.isArray(st.rooms);
+        const stations = Array.isArray(st.stations) && st.stations.length ? st.stations.length : set.rooms;
+        const rooms = live ? Math.min(set.rooms, st.rooms.length) : Math.min(set.rooms, stations);
+        const dealt = rooms * set.choresPerRoom;
+        // the bar's total: the Campers' chores still in the game (a player the host removes takes theirs along)
+        const choreTotal = live ? st.rooms.reduce((sum, r) => sum + (r.total ?? 0), 0) : dealt;
+        const people = (st.players ?? []).filter((p) => (st.phase === 'lobby' ? !p.sitOut : p.inGame)).length;
+        const n = people >= 3 ? people : 12;
+        const campers = n - (set.lurkers > 0 ? set.lurkers : n <= 6 ? 1 : 2);
+        if (campers < 1) return { rooms, choreTotal };
+        const lo = Math.floor(dealt / campers);
+        const hi = Math.ceil(dealt / campers);
+        return { rooms, choreTotal, perCamper: lo === hi ? String(lo) : `${lo} or ${hi}`, playersNote: `with ${n} players` };
+      }
+
       const stationEl = (id) => document.querySelector(`#house [data-station="${CSS.escape(id)}"]`);
       const ids = (el, attr) => (el.getAttribute(attr) ?? '').split(/\s+/).filter(Boolean);
 
       function apply(st) {
         const set = st.settings;
-        const count = (key) => (Number.isFinite(set[key]) ? set[key] : null);
-        const known = CHORE_COUNTS.every((key) => count(key) != null);
-        const values = { ...set, lurkers: lurkerCount(st), choreTotal: known ? CHORE_COUNTS.reduce((sum, key) => sum + set[key], 0) : null };
+        const values = { ...set, lurkers: lurkerCount(st), ...chores(st) };
         for (const el of $$('[data-s]')) {
           const v = values[el.dataset.s];
           el.dataset.def ??= el.textContent; // the default written in, for when a value goes back to unknown (Lurkers: Auto)
-          el.textContent = typeof v === 'number' && Number.isFinite(v) ? format(el.dataset.s, v, el.dataset.unit) : el.dataset.def;
+          if (typeof v === 'string') el.textContent = v;
+          else el.textContent = typeof v === 'number' && Number.isFinite(v) ? format(el.dataset.s, v, el.dataset.unit) : el.dataset.def;
         }
-        if (known) for (const el of $$('[data-chores]')) choreList(el, set);
 
         const flags = {
           anonymousVotes: !!set.anonymousVotes,
           revealRole: !!set.revealRole,
           barMeetings: set.barMode === 'meetings',
           stormOff: set.storm === false,
+          clockOff: set.timeLimit === 0,
           lurkersKnown: values.lurkers != null,
-          taskOff: count('taskCount') === 0,
-          actOff: count('actCount') === 0,
-          photoOff: count('photoCount') === 0,
-          carryOff: count('carryCount') === 0,
         };
         for (const el of $$('[data-show]')) el.hidden = !flags[el.dataset.show];
         for (const el of $$('[data-hide]')) el.hidden = !!flags[el.dataset.hide];
@@ -901,9 +946,20 @@
           const on = (id) => enabled.has(id);
           for (const li of $$('#house [data-station]')) li.classList.toggle('off', !on(li.dataset.station));
           for (const el of $$('[data-needs]')) el.classList.toggle('off', !ids(el, 'data-needs').every(on));
-          for (const el of $$('[data-needs-any]')) el.classList.toggle('off', !ids(el, 'data-needs-any').some(on));
-          for (const el of $$('[data-room]')) el.classList.toggle('off', !on(el.dataset.room));
         }
+
+        // this game's rooms with chores (everyone sees them), and how many of the Campers' chores there are done
+        for (const tag of $$('#house [data-station] .tag.chores')) tag.remove();
+        const rooms = Array.isArray(st.rooms) ? st.rooms : [];
+        for (const r of rooms) {
+          const li = stationEl(r.id);
+          if (!li) continue;
+          const tag = document.createElement('span');
+          tag.className = 'tag chores';
+          tag.textContent = r.total ? `Chores: ${r.done}/${r.total} done` : 'Chores';
+          li.querySelector('.where').before(tag);
+        }
+        document.getElementById('rooms-live').hidden = !rooms.length;
 
         // the storm's two stations: tags in the house list, names wherever the page mentions them
         if (Array.isArray(set.stormStations)) {
@@ -923,8 +979,8 @@
         }
 
         document.getElementById('live-note').textContent = st.phase === 'play' || st.phase === 'meeting'
-          ? 'Times on this page match this game’s settings. The host can only change them between games.'
-          : 'Times on this page match the host’s current settings. The host can change them before the next game starts.';
+          ? 'Numbers on this page match this game’s settings. The host can only change them between games.'
+          : 'Numbers on this page match the host’s current settings. The host can change them before the next game starts.';
       }
 
       const socket = io('/lake');

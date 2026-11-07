@@ -40,7 +40,17 @@ export const STATIONS = [
 ];
 
 export const CHORES = [
-  // ~2-minute phone games, two of each kind on different floors
+  // ~2-minute phone games dealt into any room (the game sets the room); one of these goes in every room
+  { id: 'pg-hold', kind: 'task', title: 'Hold the line', detail: 'Hold the button for 2 minutes. Let go for more than a second and you lose.', puzzle: 'hold' },
+  { id: 'pg-wordle', kind: 'task', title: 'Wordle', detail: 'Guess the 5-letter word in 6 tries.', puzzle: 'wordle' },
+  { id: 'pg-24', kind: 'task', title: 'Make 24', detail: 'Make 24 from four cards with + − × ÷. Solve 3 hands.', puzzle: 'make24' },
+  { id: 'pg-snake', kind: 'task', title: 'Snake', detail: 'Eat 12 apples without crashing.', puzzle: 'snake' },
+  { id: 'pg-bj', kind: 'task', title: 'Blackjack', detail: 'Win 3 hands before the dealer beats you 3 times.', puzzle: 'blackjack' },
+  { id: 'pg-50', kind: 'task', title: 'Tap 1 to 50', detail: 'Tap the numbers 1 to 50 in order. A wrong tap freezes you for 3 seconds.', puzzle: 'tap50' },
+  { id: 'pg-crack', kind: 'task', title: 'Crack the code', detail: 'Brute-force the 2-digit code, one try at a time.', puzzle: 'crack' },
+
+  // the same games pinned to rooms: from the earlier per-player deal, kept so saved games still load
+
   { id: 'g-hold-hall', kind: 'task', station: 'up-east', title: 'Hold the line', detail: 'Hold the button for 2 minutes. Let go for more than a second and you lose.', puzzle: 'hold' },
   { id: 'g-hold-patio', kind: 'task', station: 'screened-patio', title: 'Hold the line', detail: 'Hold the button for 2 minutes. Let go for more than a second and you lose.', puzzle: 'hold' },
   { id: 'g-wordle-up', kind: 'task', station: 'up-west', title: 'Wordle', detail: 'Guess the 5-letter word in 6 tries.', puzzle: 'wordle' },

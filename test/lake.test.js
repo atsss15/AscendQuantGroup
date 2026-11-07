@@ -110,37 +110,54 @@ test('Campfire: everyone here skips ahead, votes eject the top player, tie or sk
   assert.equal(r.reason, 'skip');
 });
 
-test('chores: activities need the right station and the full timer; two phone games are dealt; carries go from A to B; lurker chores never count', () => {
+test('chores: activities need the right station and the full timer; carries go from A to B; lurker chores never count', () => {
   const { store, clock, lurkers, campers } = setup(9);
-  const you = store.view(campers[0]).you;
-  assert.equal(you.chores.filter((c) => c.kind === 'task').length, 2, 'two ~2-minute phone games by default');
-  const act = you.chores.find((c) => c.kind === 'act');
-  throws(() => store.choreStart(campers[0], { choreId: act.id, code: 'ZZZZ' }), /at the/);
-  store.choreStart(campers[0], { choreId: act.id, code: store.codes[act.stationId] });
-  throws(() => store.choreDone(campers[0], { choreId: act.id, code: store.codes[act.stationId] }), /timer/);
+  const find = (kind) => campers.map((id) => [id, store.view(id).you.chores.find((c) => c.kind === kind)]).find(([, c]) => c);
+  const [aid, act] = find('act');
+  throws(() => store.choreStart(aid, { choreId: act.id, code: 'ZZZZ' }), /at the/);
+  store.choreStart(aid, { choreId: act.id, code: store.codes[act.stationId] });
+  throws(() => store.choreDone(aid, { choreId: act.id, code: store.codes[act.stationId] }), /timer/);
   clock.t += act.seconds * 1000;
-  store.choreDone(campers[0], { choreId: act.id, code: store.codes[act.stationId] });
+  store.choreDone(aid, { choreId: act.id, code: store.codes[act.stationId] });
   assert.equal(store.view(null).bar.done, 1);
 
-  const carry = you.chores.find((c) => c.kind === 'carry');
-  throws(() => store.choreDone(campers[0], { choreId: carry.id, code: store.codes[carry.toId] }), /Pick up/);
-  assert.deepEqual(store.choreDone(campers[0], { choreId: carry.id, code: store.codes[carry.fromId] }), { step: 1, done: false });
-  assert.deepEqual(store.choreDone(campers[0], { choreId: carry.id, code: store.codes[carry.toId] }), { step: 1, done: true });
+  const [cid, carry] = find('carry');
+  throws(() => store.choreDone(cid, { choreId: carry.id, code: store.codes[carry.toId] }), /Pick up/);
+  assert.deepEqual(store.choreDone(cid, { choreId: carry.id, code: store.codes[carry.fromId] }), { step: 1, done: false });
+  assert.deepEqual(store.choreDone(cid, { choreId: carry.id, code: store.codes[carry.toId] }), { step: 1, done: true });
 
-  const lt = store.view(lurkers[0]).you.chores.find((c) => c.kind === 'act');
-  store.choreStart(lurkers[0], { choreId: lt.id, code: store.codes[lt.stationId] });
-  clock.t += lt.seconds * 1000;
-  store.choreDone(lurkers[0], { choreId: lt.id, code: store.codes[lt.stationId] });
+  const lt = lurkers.map((id) => [id, store.view(id).you.chores.find((c) => c.kind === 'task')]).find(([, c]) => c);
+  store.choreStart(lt[0], { choreId: lt[1].id, code: store.codes[lt[1].stationId] });
+  clock.t += 120_000;
+  store.choreDone(lt[0], { choreId: lt[1].id, code: store.codes[lt[1].stationId] });
   assert.equal(store.view(null).bar.done, 2, 'the bar only counts campers');
 });
 
+test('deal: 12 random rooms with 3 chores each, one phone game in each, split evenly among the Campers; everyone sees the rooms', () => {
+  const { store, ids, lurkers, campers } = setup(12);
+  const rooms = 12;
+  assert.equal(store.view(null).bar.total, rooms * 3);
+  const pub = store.view(null).rooms;
+  assert.equal(pub.length, 12, 'everyone sees the 12 rooms with chores');
+  assert.ok(pub.every((r) => r.total >= 1 && r.done === 0 && r.name));
+  assert.equal(pub.reduce((n, r) => n + r.total, 0), 36);
+  const counts = campers.map((id) => store.game.players[id].chores.length);
+  assert.ok(Math.max(...counts) - Math.min(...counts) <= 1, counts.join(','));
+  for (const id of lurkers) assert.equal(store.game.players[id].chores.length, Math.max(...counts));
+  const games = new Map();
+  for (const id of campers) for (const c of store.game.players[id].chores) if (c.at) games.set(c.at, (games.get(c.at) ?? 0) + 1);
+  assert.equal(games.size, rooms, 'every room has a phone game');
+  assert.equal(ids.length, 12);
+});
+
 test('chore bar full: campers win', () => {
-  const { store, campers } = setup(7, { taskCount: 0, actCount: 0, photoCount: 0, carryCount: 1 });
-  for (const id of campers) {
-    const c = store.view(id).you.chores[0];
-    store.choreDone(id, { choreId: c.id, code: store.codes[c.fromId] });
-    store.choreDone(id, { choreId: c.id, code: store.codes[c.toId] });
-  }
+  const { store, clock, campers } = setup(7, { choresPerRoom: 1, disabled: STATIONS.map((x) => x.id).filter((id) => id !== 'campfire'), storm: false });
+  assert.equal(store.view(null).bar.total, 1);
+  const id = campers.find((x) => store.game.players[x].chores.length);
+  const c = store.view(id).you.chores[0];
+  store.choreStart(id, { choreId: c.id, code: store.codes.campfire });
+  clock.t += 120_000;
+  store.choreDone(id, { choreId: c.id, code: store.codes.campfire });
   assert.equal(store.phase, 'over');
   assert.equal(store.view(null).over.winner, 'campers');
 });
@@ -362,11 +379,12 @@ test('photos: one player can take at most 20 a game', () => {
   throws(() => store.checkPhoto(campers[0], args), /20 photos from you/);
 });
 
-test("can't start when no chore can be dealt", () => {
+test('with only the Campfire switched on, the game deals just its chores', () => {
   const store = new LakeStore();
   for (let i = 0; i < 5; i++) store.login({ name: `P${i}`, pin: '1234' });
-  store.setSettings({ storm: false, actCount: 0, disabled: STATIONS.map((s) => s.id).filter((id) => id !== 'campfire') });
-  assert.match(store.startProblem(), /No chores/);
+  store.setSettings({ storm: false, disabled: STATIONS.map((x) => x.id).filter((id) => id !== 'campfire') });
+  assert.equal(store.startProblem(), null);
+  assert.equal(store.roomChores().length, 3);
 });
 
 test('saves and loads mid-storm, mid-Campfire and paused, and the game carries on', () => {
@@ -512,11 +530,11 @@ test('over /lake: a kill pushes nothing to the other phones; gallery needs a sig
   assert.match((await ask(tv, 'host:login', { password: 'admin-pw' })).error, /Too many/);
 });
 
-test('activity chores: need the station and the full timer; capped per game (one radio, one table)', () => {
-  const { store, clock, ids, campers } = setup(10, { taskCount: 0, actCount: 4, photoCount: 0, carryCount: 0 });
+test('activity chores: need the station and the full timer; each room activity goes to one Camper at most', () => {
+  const { store, clock, campers } = setup(10, { rooms: 23 });
   const dealt = new Map();
-  for (const id of ids) for (const c of store.view(id).you.chores) dealt.set(c.title, (dealt.get(c.title) ?? 0) + 1);
-  for (const def of CHORES.filter((c) => c.max)) assert.ok((dealt.get(def.title) ?? 0) <= def.max, `${def.title} dealt ${dealt.get(def.title)} times`);
+  for (const id of campers) for (const c of store.view(id).you.chores) if (c.kind === 'act') dealt.set(c.title, (dealt.get(c.title) ?? 0) + 1);
+  for (const [title, n] of dealt) assert.equal(n, 1, `${title} dealt ${n} times`);
   const pick = campers.map((id) => [id, store.view(id).you.chores.find((c) => c.kind === 'act')]).find(([, c]) => c);
   const [id, act] = pick;
   throws(() => store.choreStart(id, { choreId: act.id, code: 'ZZZZ' }), /at the/);
@@ -583,14 +601,13 @@ test('chores are hidden until their room is scanned: only the room shows, then s
   assert.ok(store.view(campers[1]).you.chores.filter((c) => c.kind === 'hidden').length <= other);
 });
 
-test('map: every house station has a spot on a floor plan; phone games are on every floor', () => {
+test('map: every house station has a spot on a floor plan', () => {
   const { store } = setup(9);
   for (const st of store.view(null).stations) {
     if (st.floor === 'Outside' || st.floor === 'Games') continue;
     assert.ok(st.map && st.map.x > 0 && st.map.x < 100 && st.map.y > 0 && st.map.y < 100, st.id);
   }
-  const floors = new Set(CHORES.filter((c) => c.kind === 'task').map((c) => STATIONS.find((s) => s.id === c.station).floor));
-  assert.deepEqual([...floors].sort(), ['Basement', 'Main', 'Upstairs']);
+  assert.equal(CHORES.filter((c) => c.kind === 'task' && !c.station).length, 7, 'seven phone games, dealt into any room');
 });
 
 test('a lost phone game moves to another room, hidden again; it can be won there', () => {
@@ -614,4 +631,46 @@ test('a lost phone game moves to another room, hidden again; it can be won there
   clock.t += 120_000;
   store.choreDone(id, { choreId: game.id, code: store.codes[moved.stationId] });
   assert.equal(store.view(id).you.chores.find((c) => c.id === game.id).done, true);
+});
+
+test('countdown: 40 minutes of play; Campfires and pauses stop it; running out hands the Lurkers the win', () => {
+  const { store, clock, campers } = setup(9);
+  assert.equal(store.view(null).clock.endsAt, clock.t + 40 * 60_000);
+  clock.t += 10 * 60_000;
+  store.bell(campers[0], { code: store.codes.campfire });
+  assert.equal(store.view(null).clock.left, 30 * 60_000);
+  clock.t += 5 * 60_000; // a long Campfire
+  store.skip(); store.skip(); store.skip(); store.skip();
+  assert.equal(store.phase, 'play');
+  assert.equal(store.view(null).clock.endsAt, clock.t + 30 * 60_000);
+  store.pause();
+  clock.t += 60_000;
+  store.resume();
+  assert.equal(store.view(null).clock.endsAt, clock.t + 30 * 60_000);
+  clock.t += 30 * 60_000;
+  store.tick();
+  assert.equal(store.view(null).over.winner, 'lurkers');
+  assert.match(store.view(null).over.reason, /time ran out/);
+
+  const off = setup(9, { timeLimit: 0 });
+  assert.equal(off.store.view(null).clock, null);
+});
+
+test('rooms change from game to game; a lost phone game moves to another room on the list', () => {
+  const { store, clock, campers } = setup(12);
+  const first = store.game.rooms.join();
+  let differs = false;
+  for (let i = 0; i < 5 && !differs; i++) {
+    const s2 = setup(12);
+    differs = s2.store.game.rooms.join() !== first;
+  }
+  assert.ok(differs, 'the rooms are picked at random');
+  const [id, game] = campers.map((x) => [x, store.view(x).you.chores.find((c) => c.kind === 'task')]).find(([, c]) => c);
+  store.choreStart(id, { choreId: game.id, code: store.codes[game.stationId] });
+  store.choreFail(id, { choreId: game.id, code: store.codes[game.stationId] });
+  const moved = store.view(id).you.chores.find((c) => c.id === game.id);
+  assert.ok(store.game.rooms.includes(moved.stationId), 'it stays within this game\'s rooms');
+  const room = store.view(null).rooms.find((r) => r.id === moved.stationId);
+  assert.ok(room.total >= 1);
+  clock.t += 1;
 });

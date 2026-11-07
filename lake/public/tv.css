@@ -26,6 +26,7 @@ body.is-paused #screen { opacity: 0.45; }
 .count { font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
 .count.huge { font-size: 9rem; }
 .count.mid { font-size: 4rem; }
+.count.big { font-size: 6rem; }
 .count.urgent { color: var(--red); }
 
 /* ---------- lobby */
@@ -39,14 +40,57 @@ body.is-paused #screen { opacity: 0.45; }
 .lobby-side { display: grid; gap: 2.2vh; align-content: center; min-width: 0; }
 .title { margin: 0; font-size: 4rem; font-weight: 900; letter-spacing: -0.02em; line-height: 1; }
 .section-h { margin: 1vh 0 0; font-size: 1.5rem; }
+.note.setup b { color: var(--text); }
 
 /* ---------- play */
 
-.play { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; gap: 4vh; }
+.play { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; gap: 4vh; min-height: 0; }
+/* with the rooms on screen everything above them is more compact, so it all fits 16:9 as well as 16:10 */
+.play.with-rooms { grid-template-rows: auto auto auto minmax(0, 1fr) auto; gap: 1.8vh; }
+.with-rooms .tv-head b { font-size: 1.7rem; }
+.with-rooms .chores-label { font-size: 2rem; }
+.with-rooms .chores-label b { font-size: 4rem; }
+.chores-of { margin-left: 1rem; font-size: 1.4rem; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
+.with-rooms .bar { height: 5vh; margin-top: 1vh; }
+.with-rooms .chores-sub { margin-top: 1vh; font-size: 1.1rem; }
+.with-rooms .game-clock { padding: 0.4vh 1.6vw; gap: 0.2vh; }
+.with-rooms .game-clock .clock-label { font-size: 1.2rem; }
+.with-rooms .count.big { font-size: 4.8rem; }
+.with-rooms .hints { font-size: 1.05rem; padding-top: 1.2vh; }
+.chores-row { display: grid; grid-template-columns: minmax(0, 1fr); align-items: center; }
+.chores-row.has-clock { grid-template-columns: minmax(0, 1fr) auto; gap: 3vw; }
 .tv-head { display: flex; align-items: baseline; gap: 1.5rem; font-size: 1.5rem; color: var(--muted); }
 .tv-head b { color: var(--text); font-size: 2rem; }
 .chores-label { display: flex; justify-content: space-between; align-items: baseline; font-size: 2.6rem; font-weight: 900; }
 .chores-label b { font-size: 6.5rem; line-height: 1; color: var(--green); font-variant-numeric: tabular-nums; }
+.has-clock .chores-label b { font-size: 5.2rem; }
+
+/* the game's countdown: huge, red under 5 minutes */
+.game-clock { display: grid; justify-items: center; gap: 0.6vh; padding: 1.2vh 2vw; border-left: 0.15rem solid var(--border); min-width: 15rem; }
+.game-clock .clock-label { margin: 0; font-size: 1.5rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.game-clock.stopped .count { color: var(--muted); }
+.game-clock.stopped .count.urgent { color: var(--red); }
+
+/* this game's rooms with chores: a tile each, filled as its chores get done */
+.rooms-tv { display: grid; gap: 1vh; min-height: 0; }
+.rooms-h { display: flex; gap: 1.2rem; align-items: baseline; font-size: 1.15rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; }
+.rooms-h .muted { font-weight: 600; text-transform: none; letter-spacing: 0; }
+.room-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(10.5rem, 1fr)); gap: 0.5rem; }
+.room-tile {
+  display: flex; align-items: center; gap: 0.6rem; min-width: 0; padding: 0.35rem 0.75rem; border-radius: 0.6rem; border: 0.1rem solid var(--border);
+  background: linear-gradient(90deg, rgba(63, 185, 80, 0.28) calc(var(--p, 0) * 100%), var(--panel) 0); font-size: 1.05rem;
+}
+.rt-name { flex: 1; min-width: 0; font-weight: 600; line-height: 1.1; overflow-wrap: anywhere; } /* long names take two lines */
+.rt-n { flex: none; font-variant-numeric: tabular-nums; }
+.room-tile.ok { border-color: var(--green); background: var(--green-bg); }
+.room-tile.ok .rt-name { color: var(--muted); }
+.room-tile.ok .rt-n { color: var(--green); }
+.rooms-tv.dense .room-grid { grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr)); gap: 0.35rem; }
+.rooms-tv.dense .room-tile { font-size: 0.85rem; padding: 0.15rem 0.5rem; gap: 0.4rem; }
+.rooms-tv.dense .rt-name { line-height: 1.05; }
+.play.with-rooms.many-rooms { grid-template-rows: auto auto auto minmax(0, 1fr); }
+.play.many-rooms .hints { display: none; }
+.play.with-rooms .chips.big .pchip { font-size: 1.1rem; }
 .bar { height: 8vh; margin-top: 1.5vh; border-radius: 999px; background: var(--panel-2); border: 0.12rem solid var(--border); overflow: hidden; }
 .bar-fill { height: 100%; background: linear-gradient(90deg, #238636, var(--green)); transition: width 1s ease; }
 .chores-sub { margin-top: 1.5vh; font-size: 1.35rem; color: var(--muted); }
@@ -69,6 +113,8 @@ body.storming { animation: storm-bg 1.6s ease-in-out infinite; }
 .st-state { font-size: 1.7rem; font-weight: 900; color: var(--red); }
 .storm-st.ok .st-state { color: var(--green); }
 .storm-foot { margin: 0; font-size: 1.3rem; color: var(--muted); }
+.storm-clock { display: block; margin-top: 0.4vh; color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }
+.storm-clock .urgent { color: var(--red); }
 
 /* ---------- Campfire (meeting) */
 
@@ -79,10 +125,14 @@ body[data-phase='meeting'] { background: radial-gradient(ellipse at 50% 120%, rg
 .stage-steps { display: flex; gap: 0.5rem; }
 .stage-steps span { padding: 0.15rem 0.8rem; border-radius: 999px; background: var(--panel-2); color: var(--muted); font-size: 1.1rem; font-weight: 600; }
 .stage-steps span.active { background: var(--amber); color: #1a1205; font-weight: 900; }
-.stage-title { margin: 0; font-size: 4.4rem; font-weight: 900; line-height: 1; color: var(--amber); }
+.stage-title { margin: 0; font-size: 3.8rem; font-weight: 900; line-height: 1; color: var(--amber); } /* 12 players' names still fit 16:9 */
+.meeting .lead { font-size: 1.35rem; }
 .why { margin: 0; font-size: 1.9rem; font-weight: 700; }
 .newly-out { margin: 0; font-size: 1.5rem; color: var(--red); }
 .newly-out b { color: var(--text); }
+.clock-stopped { margin: 1.2vh 0 0; font-size: 1.4rem; color: var(--muted); font-weight: 700; white-space: nowrap; }
+.clock-stopped b { color: var(--text); font-variant-numeric: tabular-nums; }
+.clock-stopped.urgent b { color: var(--red); }
 .meeting-clock { text-align: right; }
 .clock-label { font-size: 1.3rem; color: var(--muted); margin-bottom: 1vh; }
 .meeting-body { display: grid; gap: 2.2vh; align-content: start; min-height: 0; overflow: hidden; }
@@ -115,6 +165,10 @@ body[data-phase='meeting'] { background: radial-gradient(ellipse at 50% 120%, rg
 .winner p { margin: 1vh 0 0; font-size: 1.5rem; color: var(--muted); }
 .winner.campers h1 { color: var(--green); }
 .winner.lurkers h1 { color: var(--red); }
+.winner .timeup {
+  display: inline-block; margin-right: 0.8rem; padding: 0.1rem 1rem; border-radius: 999px; background: rgba(248, 81, 73, 0.16);
+  border: 0.12rem solid var(--red); color: #ffb3ad; font-weight: 900;
+}
 .over-body { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1.4fr); gap: 2vw; min-height: 0; }
 .over-body.no-photos { grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); }
 .panel-tv { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; overflow: hidden; padding: 1.2rem 1.4rem; background: var(--panel); border: 1px solid var(--border); border-radius: 1rem; }

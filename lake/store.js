@@ -7,7 +7,10 @@ export class LakeError extends Error {}
 
 export const DEFAULTS = {
   lurkers: 0, // 0 = auto: 1 for up to 6 players, else 2
-  taskCount: 2, // ~2-minute phone games
+  rooms: 12, // rooms with chores, picked at random from the switched-on ones each game
+  choresPerRoom: 3, // each of those rooms gets this many chores, split among the Campers
+  timeLimit: 40, // minutes of play (Campfires and pauses don't count) for the Campers to finish; 0 = no limit
+  taskCount: 2, // per-player counts from the earlier deal; unused since chores are dealt per room
   actCount: 2,
   photoCount: 1,
   carryCount: 1,
@@ -32,14 +35,14 @@ export const DEFAULTS = {
 };
 
 const RANGES = {
-  lurkers: [0, 3], taskCount: [0, 8], actCount: [0, 8], photoCount: [0, 3], carryCount: [0, 3],
+  lurkers: [0, 3], rooms: [1, 30], choresPerRoom: [1, 5], timeLimit: [0, 180], taskCount: [0, 8], actCount: [0, 8], photoCount: [0, 3], carryCount: [0, 3],
   killCooldown: [10, 900], startGrace: [0, 600], killAfterMeeting: [0, 600], undoSeconds: [0, 120],
   gatherSeconds: [10, 600], discussSeconds: [10, 1200], voteSeconds: [10, 600], resultSeconds: [3, 120],
   emergencies: [0, 5], stormSeconds: [20, 600], stormFirst: [0, 1800], stormCooldown: [30, 1800],
 };
 const FLAGS = ['anonymousVotes', 'revealRole', 'storm'];
 const LABELS = {
-  lurkers: 'Lurkers', taskCount: 'Puzzle chores', actCount: 'Activity chores', photoCount: 'Photo chores', carryCount: 'Carry chores',
+  lurkers: 'Lurkers', rooms: 'Rooms with chores', choresPerRoom: 'Chores per room', timeLimit: 'Time limit (minutes)', taskCount: 'Puzzle chores', actCount: 'Activity chores', photoCount: 'Photo chores', carryCount: 'Carry chores',
   killCooldown: 'Kill cooldown', startGrace: 'No-kill time at the start', killAfterMeeting: 'No-kill time after a Campfire',
   undoSeconds: 'Undo window', gatherSeconds: 'Gather time', discussSeconds: 'Discussion time', voteSeconds: 'Voting time',
   resultSeconds: 'Result time', emergencies: 'Bell rings', stormSeconds: 'Storm length', stormFirst: 'First storm after',
@@ -298,9 +301,8 @@ export class LakeStore extends EventEmitter {
     const l = this.lurkerCount(n);
     if (n - l <= l) return 'Need more Campers than Lurkers';
     const s = this.settings;
-    if (s.taskCount + s.actCount + s.photoCount + s.carryCount === 0) return 'Give everyone at least one chore';
     if (s.storm && !s.stormStations.every((id) => this.enabled(id))) return 'Switch the storm stations on (or turn storms off)';
-    if (!this.deal().length) return 'No chores at the stations that are switched on';
+    if (!this.roomChores().length) return 'No chores at the stations that are switched on';
     return null;
   }
 
@@ -312,7 +314,12 @@ export class LakeStore extends EventEmitter {
     const people = shuffle(this.participants());
     const l = this.lurkerCount(people.length);
     const players = {};
-    const taken = new Map(); // activity chore id -> players dealt it so far, for the per-game caps
+    // every room's chores, split evenly among the Campers; each Lurker gets a fake list of the same length
+    const rooms = this.pickRooms();
+    const all = this.roomChores(rooms);
+    const campers = people.length - l;
+    const share = (i) => all.filter((_, j) => j % campers === i);
+    const fake = () => shuffle(this.roomChores(rooms)).slice(0, Math.ceil(all.length / campers));
     people.forEach((p, i) => {
       players[p.id] = {
         role: i < l ? 'lurker' : 'camper',
@@ -320,7 +327,7 @@ export class LakeStore extends EventEmitter {
         ejected: false,
         kicked: false,
         death: null,
-        chores: this.deal(taken),
+        chores: this.chores(i < l ? fake() : share(i - l)),
         emergencies: s.emergencies,
         killReadyAt: now + s.startGrace * 1000,
         wrong: 0,
@@ -338,6 +345,9 @@ export class LakeStore extends EventEmitter {
       colors: Object.fromEntries(order.map((id) => [id, this.players.get(id).color])),
       stormReadyAt: now + s.stormFirst * 1000,
       bellReadyAt: now + BELL_AFTER_MEETING * 1000,
+      timeUpAt: s.timeLimit ? now + s.timeLimit * 60_000 : null, // runs only during play
+      timeLeft: null, // the clock's remainder while a Campfire has it stopped
+      rooms, // this game's rooms with chores (everyone sees them)
       storm: null,
       meeting: null,
       meetings: 0,
@@ -354,41 +364,40 @@ export class LakeStore extends EventEmitter {
     this.changed();
   }
 
-  /** A fresh chore list: tasks spread over floors, then activities, photos and carries, all at switched-on stations. */
-  deal(taken = new Map()) {
-    const s = this.settings;
-    const tasks = [];
-    const pool = shuffle(CHORES.filter((c) => c.kind === 'task' && this.enabled(c.station)));
-    let floors = new Set();
-    while (tasks.length < s.taskCount && pool.length) {
-      const i = pool.findIndex((c) => !floors.has(STATION.get(c.station).floor));
-      if (i < 0) {
-        floors = new Set();
-        continue;
-      }
-      const [c] = pool.splice(i, 1);
-      floors.add(STATION.get(c.station).floor);
-      tasks.push(c);
+  /** This game's rooms with chores: `rooms` of the switched-on stations, at random. */
+  pickRooms() {
+    return shuffle(STATIONS.filter((st) => this.enabled(st.id)).map((st) => st.id)).slice(0, this.settings.rooms);
+  }
+
+  /**
+   * The chores in the given rooms: up to choresPerRoom - 1 of each room's own activities, photos and carries (the
+   * talk chore counts as the Campfire's), one ~2-minute phone game, then more of either to fill the room. Shuffled.
+   */
+  roomChores(rooms = this.pickRooms()) {
+    const n = this.settings.choresPerRoom;
+    const games = CHORES.filter((c) => c.kind === 'task' && !c.station);
+    const out = [];
+    for (const id of rooms) {
+      const st = STATION.get(id);
+      const own = shuffle(CHORES.filter((c) =>
+        ((c.kind === 'act' || c.kind === 'photo') && c.station === st.id)
+        || (c.kind === 'carry' && c.from === st.id && this.enabled(c.to))
+        || (c.kind === 'talk' && st.id === CAMPFIRE)));
+      const gm = shuffle(games);
+      const pick = [...own.slice(0, n - 1), gm[0]];
+      const more = [...own.slice(n - 1), ...gm.slice(1)];
+      while (pick.length < n && more.length) pick.push(more.shift());
+      out.push(...pick.slice(0, n).map((c) => ({ ref: c.id, at: c.kind === 'task' ? st.id : null })));
     }
-    const acts = [];
-    const actPool = shuffle(CHORES.filter((c) => ((c.kind === 'act' && this.enabled(c.station)) || c.kind === 'talk') && (taken.get(c.id) ?? 0) < (c.max ?? Infinity)));
-    const floorOf = (c) => (c.station ? STATION.get(c.station).floor : 'Anywhere');
-    floors = new Set();
-    while (acts.length < s.actCount && actPool.length) {
-      const i = actPool.findIndex((c) => !floors.has(floorOf(c)));
-      if (i < 0) {
-        floors = new Set();
-        continue;
-      }
-      const [c] = actPool.splice(i, 1);
-      floors.add(floorOf(c));
-      acts.push(c);
-    }
-    for (const c of acts) taken.set(c.id, (taken.get(c.id) ?? 0) + 1);
-    const photos = shuffle(CHORES.filter((c) => c.kind === 'photo' && this.enabled(c.station))).slice(0, s.photoCount);
-    const carries = shuffle(CHORES.filter((c) => c.kind === 'carry' && this.enabled(c.from) && this.enabled(c.to))).slice(0, s.carryCount);
-    // a chore stays hidden (seen: false) until its player scans its station; the talk chore has none
-    return [...tasks, ...acts, ...photos, ...carries].map((c, i) => ({ id: `c${i + 1}`, ref: c.id, step: 0, done: false, doneAt: null, startedAt: null, pending: null, with: [], question: null, seen: c.kind === 'talk' }));
+    return shuffle(out);
+  }
+
+  /** Chore instances for one player. A chore stays hidden (seen: false) until its player scans its room; talk has none. */
+  chores(list) {
+    return list.map(({ ref, at }, i) => {
+      const talk = CHORE.get(ref).kind === 'talk';
+      return { id: `c${i + 1}`, ref, at, step: 0, done: false, doneAt: null, startedAt: null, pending: null, with: [], question: null, seen: talk };
+    });
   }
 
   end() {
@@ -605,12 +614,16 @@ export class LakeStore extends EventEmitter {
       const d = CHORE.get(x.ref);
       return d?.kind === 'carry' ? (x.step === 0 ? d.from : d.to) : (x.at ?? d?.station);
     }));
+    // another of this game's rooms with chores, so it stays on everyone's list
+    const active = new Set(this.game.rooms ?? STATIONS.map((st) => st.id));
     const rooms = STATIONS.filter((st) => st.id !== here && st.id !== CAMPFIRE && this.enabled(st.id));
+    const mine = rooms.filter((st) => active.has(st.id));
     const floor = STATION.get(here).floor;
     const pick = (xs) => xs[randomInt(xs.length)];
     const tiers = [
-      rooms.filter((st) => st.floor !== floor && !busy.has(st.id)),
-      rooms.filter((st) => !busy.has(st.id)),
+      mine.filter((st) => st.floor !== floor && !busy.has(st.id)),
+      mine.filter((st) => !busy.has(st.id)),
+      mine,
       rooms,
     ];
     const to = pick(tiers.find((xs) => xs.length) ?? [STATION.get(here)]);
@@ -802,6 +815,11 @@ export class LakeStore extends EventEmitter {
     }
     g.meetings += 1;
     g.barSnapshot = this.liveBar();
+    if (g.timeUpAt) {
+      // the Campers' clock stops for the Campfire
+      g.timeLeft = Math.max(0, g.timeUpAt - now);
+      g.timeUpAt = null;
+    }
     g.meeting = {
       stage: 'gather',
       endsAt: now + this.settings.gatherSeconds * 1000,
@@ -877,6 +895,10 @@ export class LakeStore extends EventEmitter {
     } else {
       g.meeting = null;
       this.phase = 'play';
+      if (g.timeLeft != null) {
+        g.timeUpAt = now + g.timeLeft;
+        g.timeLeft = null;
+      }
       for (const p of Object.values(g.players)) if (p.role === 'lurker') p.killReadyAt = now + s.killAfterMeeting * 1000;
       g.bellReadyAt = now + BELL_AFTER_MEETING * 1000;
       g.stormReadyAt = Math.max(g.stormReadyAt, now + STORM_AFTER_MEETING * 1000);
@@ -960,6 +982,7 @@ export class LakeStore extends EventEmitter {
     if (g.storm) g.storm.endsAt += dt;
     g.stormReadyAt += dt;
     g.bellReadyAt += dt;
+    if (g.timeUpAt) g.timeUpAt += dt;
     for (const p of Object.values(g.players)) {
       p.killReadyAt += dt;
       if (p.lockUntil) p.lockUntil += dt;
@@ -985,6 +1008,9 @@ export class LakeStore extends EventEmitter {
     if (this.phase === 'meeting' && g.meeting && (now >= g.meeting.endsAt || this.allIn(g.meeting))) this.advance();
     else if (this.phase === 'play' && g.storm && now >= g.storm.endsAt) {
       this.finish('lurkers', "the storm wasn't secured in time");
+      this.changed();
+    } else if (this.phase === 'play' && g.timeUpAt && now >= g.timeUpAt) {
+      this.finish('lurkers', 'time ran out before the chores were done');
       this.changed();
     }
   }
@@ -1025,6 +1051,9 @@ export class LakeStore extends EventEmitter {
       pausedAt: this.paused ? this.pausedAt : null,
       settings: this.settings,
       bar: live ? (this.settings.barMode === 'meetings' && this.phase !== 'over' ? g.barSnapshot : this.liveBar()) : null,
+      // the Campers' countdown: endsAt while it runs (frozen at pausedAt when paused), left while a Campfire stops it
+      clock: live && this.phase !== 'over' && (g.timeUpAt || g.timeLeft != null) ? { endsAt: g.timeUpAt ?? null, left: g.timeLeft ?? null } : null,
+      rooms: live ? this.roomsView() : null,
       storm: null,
       meeting: null,
       over: null,
@@ -1139,6 +1168,37 @@ export class LakeStore extends EventEmitter {
       };
     }
     return state;
+  }
+
+  /** The room a chore counts toward: a carry's pick-up room, the talk chore's Campfire, else where it is now. */
+  roomOf(c) {
+    const d = CHORE.get(c.ref);
+    if (!d) return null;
+    if (d.kind === 'carry') return d.from;
+    if (d.kind === 'talk') return CAMPFIRE;
+    return c.at ?? d.station;
+  }
+
+  /** Everyone sees this game's rooms with chores and how many of the Campers' chores there are done. */
+  roomsView() {
+    const g = this.game;
+    const count = new Map();
+    for (const p of Object.values(g.players)) {
+      if (p.role !== 'camper' || p.kicked) continue;
+      for (const c of p.chores) {
+        const id = this.roomOf(c);
+        if (!id) continue;
+        const n = count.get(id) ?? { total: 0, done: 0 };
+        n.total += 1;
+        if (c.done) n.done += 1;
+        count.set(id, n);
+      }
+    }
+    const ids = [...new Set([...(g.rooms ?? []), ...count.keys()])].filter((id) => STATION.has(id));
+    return ids.map((id) => {
+      const { name, where, floor, map } = STATION.get(id);
+      return { id, name, where, floor, map: map ?? null, ...(count.get(id) ?? { total: 0, done: 0 }) };
+    });
   }
 
   hostView(online = new Set()) {
