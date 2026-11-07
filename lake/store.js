@@ -1,13 +1,14 @@
 import { EventEmitter } from 'node:events';
 import { randomBytes, randomInt } from 'node:crypto';
-import { STATIONS, CHORES, CAMPFIRE, STORM_DEFAULT } from './stations.js';
+import { STATIONS, CHORES, QUESTIONS, CAMPFIRE, STORM_DEFAULT } from './stations.js';
 
 /** An error whose message is safe to show to the player or host. */
 export class LakeError extends Error {}
 
 export const DEFAULTS = {
   lurkers: 0, // 0 = auto: 1 for up to 6 players, else 2
-  taskCount: 3,
+  taskCount: 2, // ~2-minute phone games
+  actCount: 2,
   photoCount: 1,
   carryCount: 1,
   killCooldown: 150,
@@ -31,14 +32,14 @@ export const DEFAULTS = {
 };
 
 const RANGES = {
-  lurkers: [0, 3], taskCount: [0, 8], photoCount: [0, 3], carryCount: [0, 3],
+  lurkers: [0, 3], taskCount: [0, 8], actCount: [0, 8], photoCount: [0, 3], carryCount: [0, 3],
   killCooldown: [10, 900], startGrace: [0, 600], killAfterMeeting: [0, 600], undoSeconds: [0, 120],
   gatherSeconds: [10, 600], discussSeconds: [10, 1200], voteSeconds: [10, 600], resultSeconds: [3, 120],
   emergencies: [0, 5], stormSeconds: [20, 600], stormFirst: [0, 1800], stormCooldown: [30, 1800],
 };
 const FLAGS = ['anonymousVotes', 'revealRole', 'storm'];
 const LABELS = {
-  lurkers: 'Lurkers', taskCount: 'Puzzle chores', photoCount: 'Photo chores', carryCount: 'Carry chores',
+  lurkers: 'Lurkers', taskCount: 'Puzzle chores', actCount: 'Activity chores', photoCount: 'Photo chores', carryCount: 'Carry chores',
   killCooldown: 'Kill cooldown', startGrace: 'No-kill time at the start', killAfterMeeting: 'No-kill time after a Campfire',
   undoSeconds: 'Undo window', gatherSeconds: 'Gather time', discussSeconds: 'Discussion time', voteSeconds: 'Voting time',
   resultSeconds: 'Result time', emergencies: 'Bell rings', stormSeconds: 'Storm length', stormFirst: 'First storm after',
@@ -46,7 +47,9 @@ const LABELS = {
 };
 
 /** Shortest believable time for each puzzle, so a chore can't be ticked off without doing it. */
-const MIN_SECONDS = { hold: 7, order: 3, simon: 3, match: 3 };
+const MIN_SECONDS = { hold: 115, wordle: 20, make24: 40, snake: 40, blackjack: 25, tap50: 30, crack: 20, order: 5, simon: 6, match: 4 };
+/** A ghost can't talk, so their talk chore is a silent one this long instead. */
+const GHOST_TALK_SECONDS = 30;
 const BELL_AFTER_MEETING = 30;
 const STORM_AFTER_MEETING = 60;
 const WRONG_CODES = 5;
@@ -295,7 +298,7 @@ export class LakeStore extends EventEmitter {
     const l = this.lurkerCount(n);
     if (n - l <= l) return 'Need more Campers than Lurkers';
     const s = this.settings;
-    if (s.taskCount + s.photoCount + s.carryCount === 0) return 'Give everyone at least one chore';
+    if (s.taskCount + s.actCount + s.photoCount + s.carryCount === 0) return 'Give everyone at least one chore';
     if (s.storm && !s.stormStations.every((id) => this.enabled(id))) return 'Switch the storm stations on (or turn storms off)';
     if (!this.deal().length) return 'No chores at the stations that are switched on';
     return null;
@@ -309,6 +312,7 @@ export class LakeStore extends EventEmitter {
     const people = shuffle(this.participants());
     const l = this.lurkerCount(people.length);
     const players = {};
+    const taken = new Map(); // activity chore id -> players dealt it so far, for the per-game caps
     people.forEach((p, i) => {
       players[p.id] = {
         role: i < l ? 'lurker' : 'camper',
@@ -316,7 +320,7 @@ export class LakeStore extends EventEmitter {
         ejected: false,
         kicked: false,
         death: null,
-        chores: this.deal(),
+        chores: this.deal(taken),
         emergencies: s.emergencies,
         killReadyAt: now + s.startGrace * 1000,
         wrong: 0,
@@ -350,8 +354,8 @@ export class LakeStore extends EventEmitter {
     this.changed();
   }
 
-  /** A fresh chore list: tasks spread over floors, then photos and carries, all at switched-on stations. */
-  deal() {
+  /** A fresh chore list: tasks spread over floors, then activities, photos and carries, all at switched-on stations. */
+  deal(taken = new Map()) {
     const s = this.settings;
     const tasks = [];
     const pool = shuffle(CHORES.filter((c) => c.kind === 'task' && this.enabled(c.station)));
@@ -366,9 +370,25 @@ export class LakeStore extends EventEmitter {
       floors.add(STATION.get(c.station).floor);
       tasks.push(c);
     }
+    const acts = [];
+    const actPool = shuffle(CHORES.filter((c) => ((c.kind === 'act' && this.enabled(c.station)) || c.kind === 'talk') && (taken.get(c.id) ?? 0) < (c.max ?? Infinity)));
+    const floorOf = (c) => (c.station ? STATION.get(c.station).floor : 'Anywhere');
+    floors = new Set();
+    while (acts.length < s.actCount && actPool.length) {
+      const i = actPool.findIndex((c) => !floors.has(floorOf(c)));
+      if (i < 0) {
+        floors = new Set();
+        continue;
+      }
+      const [c] = actPool.splice(i, 1);
+      floors.add(floorOf(c));
+      acts.push(c);
+    }
+    for (const c of acts) taken.set(c.id, (taken.get(c.id) ?? 0) + 1);
     const photos = shuffle(CHORES.filter((c) => c.kind === 'photo' && this.enabled(c.station))).slice(0, s.photoCount);
     const carries = shuffle(CHORES.filter((c) => c.kind === 'carry' && this.enabled(c.from) && this.enabled(c.to))).slice(0, s.carryCount);
-    return [...tasks, ...photos, ...carries].map((c, i) => ({ id: `c${i + 1}`, ref: c.id, step: 0, done: false, doneAt: null, startedAt: null, pending: null }));
+    // a chore stays hidden (seen: false) until its player scans its station; the talk chore has none
+    return [...tasks, ...acts, ...photos, ...carries].map((c, i) => ({ id: `c${i + 1}`, ref: c.id, step: 0, done: false, doneAt: null, startedAt: null, pending: null, with: [], question: null, seen: c.kind === 'talk' }));
   }
 
   end() {
@@ -454,11 +474,28 @@ export class LakeStore extends EventEmitter {
     return id && this.enabled(id) ? id : null;
   }
 
-  station(code) {
+  station(code, playerId = null) {
     const id = this.stationOfCode(code);
     if (!id) throw new LakeError("That code doesn't match any station");
+    if (playerId) this.markSeen(playerId, id);
     const { name, floor, where } = STATION.get(id);
     return { id, name, floor, where };
+  }
+
+  /** Scanning a station shows the player what their chores there are. */
+  markSeen(playerId, stationId) {
+    if (this.phase !== 'play' && this.phase !== 'meeting') return;
+    const p = this.gp(playerId);
+    if (!p || !stationId) return;
+    let changed = false;
+    for (const c of p.chores) {
+      const d = CHORE.get(c.ref);
+      if (c.seen === false && d && (d.kind === 'carry' ? d.from : (c.at ?? d.station)) === stationId) {
+        c.seen = true;
+        changed = true;
+      }
+    }
+    if (changed) this.changed();
   }
 
   chore(p, choreId) {
@@ -505,10 +542,16 @@ export class LakeStore extends EventEmitter {
 
   choreStart(playerId, { choreId, code } = {}) {
     const p = this.inPlay(playerId, { ghost: true });
+    this.markSeen(playerId, this.stationOfCode(code));
     const c = this.chore(p, choreId);
     const def = CHORE.get(c.ref);
-    if (def.kind !== 'task') throw new LakeError('Not a puzzle chore');
-    if (this.stationOfCode(code) !== def.station) throw new LakeError(`This chore is at the ${STATION.get(def.station).name}`);
+    if (def.kind === 'talk') {
+      if (p.status !== 'ghost') throw new LakeError('Pick someone to talk to');
+    } else {
+      if (def.kind !== 'task' && def.kind !== 'act') throw new LakeError('Not a timed chore');
+      const where = c.at ?? def.station;
+      if (this.stationOfCode(code) !== where) throw new LakeError(`This chore is at the ${STATION.get(where).name}`);
+    }
     c.startedAt = this.now();
     this.changed();
     return {};
@@ -516,12 +559,23 @@ export class LakeStore extends EventEmitter {
 
   choreDone(playerId, { choreId, code } = {}) {
     const p = this.inPlay(playerId, { ghost: true });
+    this.markSeen(playerId, this.stationOfCode(code));
     const c = this.chore(p, choreId);
     const def = CHORE.get(c.ref);
     const at = this.stationOfCode(code);
     if (def.kind === 'task') {
-      if (at !== def.station) throw new LakeError(`This chore is at the ${STATION.get(def.station).name}`);
+      const where = c.at ?? def.station;
+      if (at !== where) throw new LakeError(`This chore is at the ${STATION.get(where).name}`);
       if (!c.startedAt || this.now() - c.startedAt < MIN_SECONDS[def.puzzle] * 1000) throw new LakeError('Too quick! Do the whole thing.');
+      this.complete(p, c);
+    } else if (def.kind === 'act') {
+      if (at !== def.station) throw new LakeError(`This chore is at the ${STATION.get(def.station).name}`);
+      // a second of slack for the phone's timer
+      if (!c.startedAt || this.now() - c.startedAt < (def.seconds - 1) * 1000) throw new LakeError('Keep going until the timer runs out');
+      this.complete(p, c);
+    } else if (def.kind === 'talk') {
+      if (p.status !== 'ghost') throw new LakeError(`Talk chores finish when ${def.need} people say yes`);
+      if (!c.startedAt || this.now() - c.startedAt < (GHOST_TALK_SECONDS - 1) * 1000) throw new LakeError('Keep going until the timer runs out');
       this.complete(p, c);
     } else if (def.kind === 'carry') {
       const want = c.step === 0 ? def.from : def.to;
@@ -533,6 +587,39 @@ export class LakeStore extends EventEmitter {
     }
     this.changed();
     return { step: c.step, done: c.done };
+  }
+
+  /**
+   * A lost phone game can't be retried on the spot: it moves to another room (another floor when there is one),
+   * hidden again until the player scans it there.
+   */
+  choreFail(playerId, { choreId, code } = {}) {
+    const p = this.inPlay(playerId, { ghost: true });
+    const c = this.chore(p, choreId);
+    const def = CHORE.get(c.ref);
+    if (def.kind !== 'task') throw new LakeError('Only phone games can be lost');
+    const here = c.at ?? def.station;
+    if (this.stationOfCode(code) !== here) throw new LakeError(`This chore is at the ${STATION.get(here).name}`);
+    if (!c.startedAt) throw new LakeError('Start the game first');
+    const busy = new Set(p.chores.filter((x) => x !== c && !x.done).map((x) => {
+      const d = CHORE.get(x.ref);
+      return d?.kind === 'carry' ? (x.step === 0 ? d.from : d.to) : (x.at ?? d?.station);
+    }));
+    const rooms = STATIONS.filter((st) => st.id !== here && st.id !== CAMPFIRE && this.enabled(st.id));
+    const floor = STATION.get(here).floor;
+    const pick = (xs) => xs[randomInt(xs.length)];
+    const tiers = [
+      rooms.filter((st) => st.floor !== floor && !busy.has(st.id)),
+      rooms.filter((st) => !busy.has(st.id)),
+      rooms,
+    ];
+    const to = pick(tiers.find((xs) => xs.length) ?? [STATION.get(here)]);
+    c.at = to.id;
+    c.seen = false;
+    c.startedAt = null;
+    c.fails = (c.fails ?? 0) + 1;
+    this.changed();
+    return { movedTo: to.name };
   }
 
   /** Checks a photo upload before the server saves the file. Returns whether a partner has to confirm. */
@@ -572,6 +659,25 @@ export class LakeStore extends EventEmitter {
     return { done: c.done, requestId };
   }
 
+  /** Asks a player to confirm a conversation for a talk chore. A new ask replaces one still waiting. */
+  talk(playerId, { choreId, partnerId } = {}) {
+    const p = this.inPlay(playerId);
+    const c = this.chore(p, choreId);
+    const def = CHORE.get(c.ref);
+    if (def.kind !== 'talk') throw new LakeError('Not a talk chore');
+    const q = this.gp(partnerId);
+    // a secretly dead partner is accepted (the ask just never gets an answer), so the error can't reveal a death
+    if (!q || partnerId === playerId || q.status === 'ghost' || q.kicked) throw new LakeError('Pick another player');
+    if (c.with.includes(partnerId)) throw new LakeError('You already talked to them. Find someone new!');
+    if (c.pending) this.game.requests = this.game.requests.filter((r) => r.id !== c.pending);
+    const requestId = token().slice(0, 12);
+    const question = QUESTIONS[randomInt(QUESTIONS.length)];
+    c.pending = requestId;
+    this.game.requests.push({ id: requestId, kind: 'talk', from: playerId, to: partnerId, choreId: c.id, question, at: this.now() });
+    this.changed();
+    return { requestId, question };
+  }
+
   confirmPhoto(playerId, { requestId, yes } = {}) {
     const g = this.game;
     const r = g?.requests.find((x) => x.id === requestId && x.to === playerId);
@@ -581,7 +687,12 @@ export class LakeStore extends EventEmitter {
     const from = this.gp(r.from);
     const c = from?.chores.find((x) => x.id === r.choreId);
     if (c && c.pending === r.id) c.pending = null;
-    if (yes) {
+    if (yes && r.kind === 'talk') {
+      if (c && !c.done && !c.with.includes(playerId)) {
+        c.with.push(playerId);
+        if (c.with.length >= CHORE.get(c.ref).need) this.complete(from, c);
+      }
+    } else if (yes) {
       const photo = this.photos.find((x) => x.id === r.photoId);
       if (photo) photo.partner = this.name(playerId);
       if (c && !c.done) this.complete(from, c);
@@ -906,7 +1017,7 @@ export class LakeStore extends EventEmitter {
         const gp = live ? g.players[p.id] : null;
         return { id: p.id, name: p.name, color: p.color, inGame: !!gp, out: !!gp && (gp.status === 'ghost' || gp.kicked), sitOut: p.sitOut };
       }),
-      stations: STATIONS.filter((s) => this.enabled(s.id)).map(({ id, name, floor, where }) => ({ id, name, floor, where })),
+      stations: STATIONS.filter((s) => this.enabled(s.id)).map(({ id, name, floor, where, map }) => ({ id, name, floor, where, map: map ?? null })),
       campfire: { id: CAMPFIRE, name: station(CAMPFIRE).name, where: station(CAMPFIRE).where },
       phase: this.phase,
       gameNo: this.gameNo,
@@ -980,7 +1091,11 @@ export class LakeStore extends EventEmitter {
         ejected: p.ejected,
         chores: p.chores.filter((c) => CHORE.has(c.ref)).map((c) => {
           const d = CHORE.get(c.ref);
-          const at = d.kind === 'carry' ? (c.step === 0 ? d.from : d.to) : d.station;
+          const at = d.kind === 'carry' ? (c.step === 0 ? d.from : d.to) : (c.at ?? d.station ?? null);
+          if (c.seen === false && !c.done) {
+            // only the room is known until the player scans it
+            return { id: c.id, kind: 'hidden', hidden: true, title: null, stationId: at, stationName: station(at).name, where: station(at).where, step: 0, done: false, pending: false };
+          }
           return {
             id: c.id,
             kind: d.kind,
@@ -989,9 +1104,16 @@ export class LakeStore extends EventEmitter {
             prompt: d.prompt ?? null,
             partner: !!d.partner,
             item: d.item ?? null,
+            detail: d.detail ?? null,
+            seconds: d.kind === 'act' ? d.seconds : d.kind === 'talk' && p.status === 'ghost' ? GHOST_TALK_SECONDS : null,
+            voice: !!d.voice,
+            need: d.need ?? null,
+            progress: c.with?.length ?? 0,
+            question: c.pending ? (g.requests.find((r) => r.id === c.pending)?.question ?? null) : null,
+            anywhere: d.kind === 'talk',
             stationId: at,
-            stationName: station(at).name,
-            where: station(at).where,
+            stationName: at ? station(at).name : null,
+            where: at ? station(at).where : null,
             fromId: d.from ?? null,
             fromName: d.from ? station(d.from).name : null,
             toId: d.to ?? null,
@@ -1010,7 +1132,8 @@ export class LakeStore extends EventEmitter {
         confirms: g.requests.filter((r) => r.to === playerId).map((r) => {
           const d = CHORE.get(this.gp(r.from)?.chores.find((c) => c.id === r.choreId)?.ref);
           const ph = this.photoMeta(r.photoId);
-          return { requestId: r.id, from: this.name(r.from), title: d?.title ?? 'Photo', prompt: d?.prompt ?? null, url: ph ? this.photoView(ph, viewerToken).url : null };
+          const kind = r.kind ?? 'photo';
+          return { requestId: r.id, kind, from: this.name(r.from), title: d?.title ?? 'Photo', prompt: kind === 'talk' ? r.question : (d?.prompt ?? null), url: ph ? this.photoView(ph, viewerToken).url : null };
         }),
         lockUntil: p.lockUntil,
       };

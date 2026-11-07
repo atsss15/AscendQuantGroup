@@ -1,7 +1,10 @@
 /* global io */
 /**
- * Lake Lurkers phone app at /lake (and /lake/s/:code when a station QR is scanned): sign in, lobby, play, station
- * screen, puzzles, photos, Campfires, game over, gallery and the host's controls.
+ * Lake Lurkers phone app at /lake (and /lake/s/:code when a station QR is scanned): sign in, lobby, play ("My rooms":
+ * chores stay hidden until their room is scanned), the house map, the in-app QR scanner, station screen, phone games
+ * (window.LakeGames from games.js; one try each: a lost or quit game moves to another room), activities (timed real-life
+ * chores), the talk chore, photos, Campfires, game over,
+ * gallery and the host's controls.
  * Every 'state' push re-renders, but each slot only rebuilds when the data it shows changed, so typing, holds and
  * puzzles aren't interrupted. A camper's and a lurker's screens look the same until the role card is held.
  */
@@ -40,6 +43,13 @@
     get: (k) => { try { return localStorage.getItem(k) ?? memory.get(k) ?? null; } catch { return memory.get(k) ?? null; } },
     set: (k, v) => { memory.set(k, v); try { localStorage.setItem(k, v); } catch { /* private mode */ } },
     del: (k) => { memory.delete(k); try { localStorage.removeItem(k); } catch { /* private mode */ } },
+  };
+
+  // this tab only (a reload keeps it, other tabs of the game never see it); nothing when storage is blocked
+  const session = {
+    get: (k) => { try { return sessionStorage.getItem(k); } catch { return null; } },
+    set: (k, v) => { try { sessionStorage.setItem(k, v); } catch { /* private mode */ } },
+    del: (k) => { try { sessionStorage.removeItem(k); } catch { /* private mode */ } },
   };
 
   function toast(msg, kind = 'info') {
@@ -163,7 +173,10 @@
   const KEY_HOST = 'lake.hostToken';
   const KEY_WAKE = 'lake.wake';
   const KEY_SOUND = 'lake.sound';
-  const PUZZLE_MIN = { hold: 7, order: 3, simon: 3, match: 3 }; // seconds the server wants between choreStart and choreDone
+  const KEY_LAST = 'lake.lastStation';
+  const KEY_PLAYING = 'lake.playing'; // the phone game this tab is in the middle of (sessionStorage)
+  // seconds the server wants between choreStart and choreDone
+  const PUZZLE_MIN = { hold: 115, wordle: 20, make24: 40, snake: 40, blackjack: 25, tap50: 30, crack: 20, order: 5, simon: 6, match: 4 };
 
   const store = {
     state: null, // last personalized 'state'
@@ -177,13 +190,20 @@
     resuming: false, // (re)connected with a token, `resume` not answered yet
   };
   const ui = {
-    view: null, // full-screen sheet: station | puzzle | photo | gallery
+    view: null, // full-screen sheet: station | puzzle | act | talk | photo | gallery | map | scan
     pendingCode: null, // station code from /lake/s/:code, opened once signed in
+    lastStation: null, // { game, id } of the station scanned last, ringed on the map
+    mapTab: null, // the map tab picked last
+    mapZoom: false,
+    confirmOver: false, // a waiting photo/talk check opened on top of a phone game
     voteFor: null, // picked but not yet confirmed
     snoozed: new Set(), // photo requests put off with "Not now"
     answered: new Set(), // photo requests answered, hidden until the server drops them
     seenConfirms: new Set(),
+    leftChecked: false, // looked for a phone game this tab left mid-way (leftGameCheck), once per page load
     partnerOf: {}, // choreId -> partner name, for "waiting for X"
+    talkTo: {}, // talk choreId -> id of the player asked last
+    talked: {}, // talk choreId -> ids of players who said yes (as far as this phone saw)
   };
 
   /** Server time; frozen while the game is paused. */
@@ -191,6 +211,9 @@
 
   const scanned = location.pathname.match(/^\/lake\/s\/([^/?#]+)/);
   if (scanned) ui.pendingCode = decodeURIComponent(scanned[1]);
+  try { ui.lastStation = JSON.parse(storage.get(KEY_LAST) ?? 'null'); } catch { /* not ours */ }
+  /** The station I scanned last in this game, or null. */
+  const lastStationId = (s) => (ui.lastStation && ui.lastStation.game === s?.gameNo ? ui.lastStation.id : null);
   // /lake/admin (or /lake/host) asks for the host password straight away
   let askHost = /^\/lake\/(admin|host)\/?$/.test(location.pathname);
 
@@ -275,6 +298,7 @@
     if (s.me) store.expectMe = false;
     noticeChanges(prev, s);
     render();
+    leftGameCheck(s);
   });
   socket.on('host', (view) => {
     store.host = view;
@@ -295,6 +319,7 @@
       syncWake();
     } else {
       closeRole(); // never leave the role card open in a pocket
+      if (ui.view?.kind === 'scan') showView(ui.view.back); // and never leave the camera on
     }
   });
 
@@ -422,9 +447,13 @@
     }
     if (!prev) return;
     const newGame = s.gameNo !== prev.gameNo;
+    // say so before the Campfire closes it: a game cut short by a Campfire is not a loss
+    if (s.phase === 'meeting' && prev.phase === 'play' && !newGame) interruptGame('Campfire');
     if (s.phase !== prev.phase || newGame) closeViews();
     if (s.phase === 'play' && (newGame || prev.phase === 'lobby' || prev.phase === 'over')) {
       ui.partnerOf = {};
+      ui.talkTo = {};
+      ui.talked = {};
       ui.snoozed.clear();
       ui.answered.clear();
       ui.voteFor = null;
@@ -449,6 +478,8 @@
       if (s.meeting.stage === 'vote') vibrate(250);
     }
     if (s.storm && !prev.storm) {
+      // the storm alert takes over the screen, so a phone game would run on (and be lost) unseen under it: stop it
+      interruptGame('storm');
       SFX.siren();
       vibrate([300, 100, 300, 100, 300]);
       flash('storm', 'Storm!', `Secure ${listNames(s.storm.stations.map((x) => x.name))}`, 'Two different players, before time runs out.');
@@ -467,13 +498,21 @@
       for (const c of you.chores) {
         const pc = pyou.chores.find((x) => x.id === c.id);
         if (!pc) continue;
-        const partner = ui.partnerOf[c.id] ?? 'Your partner';
+        const partner = ui.partnerOf[c.id] ?? (c.kind === 'talk' ? 'They' : 'Your partner');
+        const saidYes = c.kind === 'talk' && c.progress > pc.progress;
+        if (saidYes && ui.talkTo[c.id] && !(ui.talked[c.id] ?? []).includes(ui.talkTo[c.id])) {
+          ui.talked[c.id] = [...(ui.talked[c.id] ?? []), ui.talkTo[c.id]];
+        }
         if (!pc.done && c.done) {
           SFX.ding();
           vibrate(60);
           if (c.kind === 'photo' && pc.pending) toast(`${partner} said yes. Photo done ✓`);
-        } else if (pc.pending && !c.pending) {
-          toast(`${partner} said no (or couldn’t answer). Take it again.`, 'error');
+          if (saidYes) toast(`${partner} said yes. ${c.title} done ✓`);
+        } else if (saidYes) {
+          SFX.blip();
+          toast(`${partner} said yes ✓ ${c.progress} of ${c.need} done. Find someone new!`);
+        } else if (pc.pending && !c.pending && you.status === 'alive') {
+          toast(c.kind === 'talk' ? `${partner} said no (or couldn’t answer). Ask someone else.` : `${partner} said no (or couldn’t answer). Take it again.`, 'error');
         }
       }
     }
@@ -873,7 +912,8 @@
     const st = s.settings ?? {};
     const n = s.players.filter((p) => !p.sitOut).length;
     const lurkers = st.lurkers || (n <= 6 ? 1 : 2);
-    const chores = [plural(st.taskCount, 'task'), plural(st.photoCount, 'photo'), plural(st.carryCount, 'carry', 'carries')].join(', ');
+    const chores = [[st.taskCount ?? 0, 'phone game'], [st.actCount ?? 0, 'activity', 'activities'], [st.photoCount, 'photo'], [st.carryCount, 'carry', 'carries']]
+      .filter(([n]) => n > 0).map(([n, one, many]) => plural(n, one, many)).join(', ') || 'no chores';
     return [
       h('h2', {}, 'This game'),
       h('ul', { class: 'facts' },
@@ -891,7 +931,9 @@
       h('summary', {}, 'How to play, in 30 seconds'),
       h('ol', {},
         h('li', {}, 'Press and hold your role card to see if you’re a Camper or a Lurker. Keep it secret.'),
-        h('li', {}, 'Do your chores: go to the place, scan its QR code with your camera, and finish the chore.'),
+        h('li', {}, 'My rooms shows where your chores are, and 🗺 Map shows where those rooms are. What to do there stays hidden until you get there.'),
+        h('li', {}, 'At the room, scan its QR code: tap 📷 Scan QR right here in the app (or use your phone’s camera, or type the code under it). Then do the chore: a phone game (about 2 minutes), an activity, a photo or carrying something. 💬 chores work anywhere.'),
+        h('li', {}, 'Phone games are one try: lose one (or quit it) and it moves to another room, hidden again until you find it there.'),
         h('li', {}, 'Lurkers tap Campers on the shoulder to kill them. If you’re tapped, sit down and stay silent.'),
         h('li', {}, 'Found a body? Type the code on their phone. Everyone runs to the Campfire to talk and vote.'),
         h('li', {}, 'Campers win by finishing every chore or voting out every Lurker.')));
@@ -909,60 +951,144 @@
         const s = store.state;
         const you = s.you;
         fill(top, headerData(s), () => gameHeader(s));
-        const waiting = you.confirms.filter((c) => ui.snoozed.has(c.requestId) && !ui.answered.has(c.requestId)).length;
-        fill(banners, [you.status, you.ejected, waiting], () => [
+        const waiting = you.confirms.filter((c) => ui.snoozed.has(c.requestId) && !ui.answered.has(c.requestId));
+        fill(banners, [you.status, you.ejected, waiting.map((c) => c.kind)], () => [
           you.status === 'ghost' ? ghostBanner(you) : '',
-          waiting && you.status === 'alive' ? h('button', {
+          waiting.length && you.status === 'alive' ? h('button', {
             type: 'button',
             class: 'waiting-banner',
             onclick: () => { ui.snoozed.clear(); render(); },
-          }, `📷 ${plural(waiting, 'photo')} waiting for your answer`) : '',
+          }, waitingLabel(waiting)) : '',
         ]);
         renderRole();
-        fill(chores, [you.chores, ui.partnerOf], () => choreList(s, you));
+        fill(chores, [you.chores, you.status, ui.partnerOf, s.stations.map((st) => st.id)], () => roomList(s, you));
         report.update(you);
       },
     };
+  }
+
+  function waitingLabel(list) {
+    const talks = list.filter((c) => c.kind === 'talk').length;
+    const photos = list.length - talks;
+    if (!talks) return `📷 ${plural(photos, 'photo')} waiting for your answer`;
+    if (!photos) return `💬 ${plural(talks, 'question')} waiting for your answer`;
+    return `${plural(list.length, 'check')} waiting for your answer`;
   }
 
   const ghostBanner = (you) => h('div', { class: 'ghost-banner' },
     h('b', {}, '👻 You’re a ghost.'), ' Stay silent, keep doing chores.',
     you.ejected ? h('div', { class: 'small' }, 'You were voted out.') : '');
 
-  function choreList(s, you) {
+  const FLOOR_RANK = { Main: 0, Upstairs: 1, Basement: 2, Outside: 3, Games: 4 };
+
+  /**
+   * My chores grouped by room, for the room list and the map. A hidden chore only says which room it's in; a carry
+   * counts at the room it's waiting on (pick-up, then drop-off). The talk chore has no room.
+   */
+  function myRooms(s, you) {
+    const rooms = new Map();
+    const talk = [];
+    for (const c of you?.chores ?? []) {
+      if (c.kind === 'talk' || !c.stationId) {
+        talk.push(c);
+        continue;
+      }
+      if (!rooms.has(c.stationId)) {
+        const st = s.stations.find((x) => x.id === c.stationId);
+        rooms.set(c.stationId, { id: c.stationId, name: c.stationName ?? st?.name ?? '?', where: c.where ?? st?.where ?? '', floor: st?.floor ?? '', chores: [] });
+      }
+      rooms.get(c.stationId).chores.push(c);
+    }
+    const list = [...rooms.values()].map((r) => ({ ...r, left: r.chores.filter((c) => !c.done).length }));
+    // rooms with something left first, then by floor
+    list.sort((a, b) => (!a.left - !b.left) || (FLOOR_RANK[a.floor] ?? 9) - (FLOOR_RANK[b.floor] ?? 9));
+    return { rooms: list, talk };
+  }
+
+  function roomList(s, you) {
+    const ghost = you.status === 'ghost';
+    const { rooms, talk } = myRooms(s, you);
     const done = you.chores.filter((c) => c.done).length;
-    const sorted = [...you.chores].sort((a, b) => a.done - b.done);
+    const carrying = you.chores.filter((c) => c.kind === 'carry' && c.step >= 1 && !c.done);
     return [
-      h('h2', {}, 'My chores', h('span', {}, `${done} of ${you.chores.length} done`)),
-      h('ul', { class: 'chores' }, sorted.map((c) => choreItem(s, c))),
-      h('p', { class: 'small muted' }, 'Go there, scan the QR code, and do the chore on your phone.'),
+      h('div', { class: 'rooms-head' },
+        h('div', { class: 'grow' }, h('h2', {}, 'My rooms'), h('div', { class: 'small muted' }, `${done} of ${plural(you.chores.length, 'chore')} done`)),
+        h('button', { type: 'button', class: 'map-btn', onclick: () => openMap() }, '🗺 Map')),
+      carrying.map((c) => h('button', { type: 'button', class: 'carrying', onclick: () => openMap(c.toId) },
+        `📦 Carrying ${c.item} → drop at the ${c.toName}`)),
+      h('ul', { class: 'rooms' },
+        rooms.filter((r) => r.left).map(roomItem),
+        talk.filter((c) => !c.done).map((c) => talkItem(c, ghost)),
+        rooms.filter((r) => !r.left).map(roomItem),
+        talk.filter((c) => c.done).map((c) => talkItem(c, ghost))),
+      h('p', { class: 'small muted' }, 'What to do in a room stays hidden until you scan its QR code there. Phone games take about 2 minutes; lose one (or quit) and it moves to another room. Tap a room to see it on the map.'),
     ];
   }
 
-  const ICONS = { task: '🧹', photo: '📷', carry: '📦' };
-  const whereOf = (s, id) => s.stations.find((st) => st.id === id)?.where ?? '';
+  /** One room: tap it to see it on the map. */
+  function roomItem(r) {
+    const shown = r.chores.filter((c) => !c.hidden);
+    const hidden = r.chores.filter((c) => c.hidden && !c.done).length;
+    return h('li', {},
+      h('button', { type: 'button', class: `room ${r.left ? '' : 'done'}`, onclick: () => openMap(r.id) },
+        h('span', { class: 'room-head' },
+          h('b', { class: 'room-name' }, r.name),
+          r.left ? h('span', { class: 'room-badge' }, `${r.left} to do`) : h('span', { class: 'room-ok' }, '✓ done')),
+        r.left ? h('span', { class: 'room-where' }, r.where) : '',
+        r.left ? shown.map(roomChore) : '',
+        r.left && hidden ? h('span', { class: 'room-hidden' }, shown.length ? `🔒 ${plural(hidden, 'more chore')}: scan the room to see` : '🔒 Scan the room to see what to do') : ''));
+  }
 
-  function choreItem(s, c) {
-    let place = c.stationName;
-    let where = c.where;
-    if (c.kind === 'carry') {
-      if (c.done) [place, where] = [`Delivered ${c.item}`, ''];
-      else if (c.step >= 1) [place, where] = [`Drop ${c.item} at the ${c.toName}`, whereOf(s, c.toId)];
-      else [place, where] = [`Pick up ${c.item} at the ${c.fromName}`, whereOf(s, c.fromId)];
-    }
-    return h('li', { class: `chore ${c.done ? 'done' : ''}` },
-      h('span', { class: 'chore-icon', 'aria-hidden': 'true' }, c.done ? '✓' : ICONS[c.kind] ?? '•'),
-      h('div', { class: 'grow' },
-        h('div', { class: 'chore-title' }, c.title),
-        h('div', { class: 'chore-place' }, place),
-        where && !c.done ? h('div', { class: 'chore-where' }, where) : '',
-        c.kind === 'photo' && !c.done && c.prompt ? h('div', { class: 'chore-where' }, `“${c.prompt}”`) : '',
-        c.pending ? h('div', { class: 'chore-wait' }, `Waiting for ${ui.partnerOf[c.id] ?? 'your partner'} to say yes`) : ''));
+  function choreText(c) {
+    if (c.kind !== 'carry') return c.title;
+    return c.done ? `Delivered ${c.item}` : c.step >= 1 ? `Drop off ${c.item} here` : `Pick up ${c.item} for the ${c.toName}`;
+  }
+
+  function roomChore(c) {
+    const text = choreText(c);
+    const wait = c.pending && !c.done ? `Waiting for ${ui.partnerOf[c.id] ?? 'your partner'} to say yes` : '';
+    return h('span', { class: `room-chore ${c.done ? 'done' : ''}` },
+      h('span', { class: 'room-ico', 'aria-hidden': 'true' }, c.done ? '✓' : choreIcon(c)),
+      h('span', { class: 'grow' }, text, wait ? h('span', { class: 'chore-wait' }, wait) : ''));
+  }
+
+  function talkItem(c, ghost) {
+    const need = c.need ?? 3;
+    const got = Math.min(need, c.progress ?? 0);
+    const head = h('div', { class: 'room-head' },
+      h('b', { class: 'room-name' }, '💬 Anywhere'),
+      c.done ? h('span', { class: 'room-ok' }, '✓ done') : h('span', { class: 'room-badge' }, `${got}/${need}`));
+    if (c.done) return h('li', {}, h('div', { class: 'room talk done' }, head));
+    return h('li', {}, h('div', { class: 'room talk' },
+      head,
+      h('span', { class: 'room-chore' }, h('span', { class: 'room-ico', 'aria-hidden': 'true' }, '💬'), h('span', { class: 'grow' }, c.title)),
+      h('span', { class: 'room-where' }, ghost ? `Ghosts can’t talk: silently wave at ${need} players instead (${c.seconds ?? 30} s)` : `${got} of ${need} said yes`),
+      c.pending && !ghost ? h('span', { class: 'chore-wait' }, `Waiting for ${ui.partnerOf[c.id] ?? 'them'} to say yes`) : '',
+      h('button', { type: 'button', class: 'chore-btn', onclick: () => openTalk(c.id) },
+        ghost ? '👋 Wave at players' : c.pending ? '💬 Back to the question' : '💬 Talk to someone')));
+  }
+
+  const ICONS = { task: '🎮', photo: '📷', carry: '📦', talk: '💬' };
+  const GAME_ICONS = { hold: '✋', wordle: '🔤', make24: '🧮', snake: '🐍', blackjack: '🃏', tap50: '🔢', crack: '🔐', order: '🔢', simon: '🎵', match: '🧩' };
+  // activities by station (one activity per station, except the radio's two, which both get the mic)
+  const ACT_ICONS = {
+    radio: '🎤', campfire: '💃', pingpong: '🏓', curling: '🥌', golf: '⛳',
+    sunroom: '🧘', kitchen: '🧽', dining: '🥤', 'east-living': '🎭', foyer: '🤸', office: '✍️', laundry: '🧺',
+    'up-west': '🏋️', 'up-east': '💪', den: '✊', media: '🎬', gym: '💪', bar: '🍹', 'b-office': '🎨',
+    'screened-patio': '🧱', 'covered-patio': '🦩', dock: '⛵', shore: '🪨',
+  };
+  /** Activities you keep trying until you pull it off: their button says "I did it!" instead of "Done". */
+  const SKILL_STATIONS = new Set(['pingpong', 'curling', 'golf']);
+  function choreIcon(c) {
+    if (c.kind === 'act') return ACT_ICONS[c.stationId] ?? (c.voice ? '🎤' : '🎯');
+    if (c.kind === 'task') return GAME_ICONS[c.puzzle] ?? ICONS.task;
+    return ICONS[c.kind] ?? '•';
   }
 
   function buildScan() {
     const input = plain(h('input', { class: 'big-input code', placeholder: 'Code', autocapitalize: 'characters', maxLength: 8, enterkeyhint: 'go', 'aria-label': 'Station code' }));
     const btn = h('button', { type: 'submit', class: 'primary' }, 'Go');
+    const scanBtn = h('button', { type: 'button', class: 'primary btn-big scan-btn', onclick: () => openScanner() }, '📷 Scan QR');
     return h('form', {
       class: 'box',
       onsubmit: async (e) => {
@@ -979,7 +1105,8 @@
       },
     },
     h('h2', {}, 'At a station?'),
-    h('p', { class: 'small muted' }, 'Scan its QR code with your phone’s camera, or type the code printed under it.'),
+    scanBtn,
+    h('p', { class: 'small muted' }, 'Scan the QR code on the station card right here in the app, or with your phone’s camera. Or type the code printed under it:'),
     h('div', { class: 'inline-form' }, input, btn));
   }
 
@@ -1299,7 +1426,10 @@
     const s = store.state;
     if (!v || v.kind === 'gallery') return;
     const blocked = !s?.me || s.phase === 'meeting' || s.you?.status === 'dead';
-    if (blocked || ((v.kind === 'puzzle' || v.kind === 'photo') && s.phase !== 'play')) closeViews();
+    const inGame = ['puzzle', 'photo', 'act', 'talk', 'map', 'scan'].includes(v.kind);
+    if (blocked || (inGame && (s.phase !== 'play' || !s.you))) closeViews();
+    // the pause screen covers a phone game, which would run on (and be lost) under it: stop it, not as a loss
+    else if (v.kind === 'puzzle' && s.paused) interruptGame('pause');
   }
 
   function renderSheet() {
@@ -1340,6 +1470,10 @@
     }
     const st = res.station;
     const v = { kind: 'station', code, station: st, bellAsk: false };
+    if (store.state?.phase === 'play' || store.state?.phase === 'meeting') {
+      ui.lastStation = { game: store.state.gameNo, id: st.id };
+      storage.set(KEY_LAST, JSON.stringify(ui.lastStation));
+    }
     const chores = slot('stack');
     const bell = slot();
     const storm = slot();
@@ -1376,16 +1510,25 @@
     fill(slots.storm, ss ? [ss.secured, you.status, s.storm.endsAt] : null, () => (ss ? stormBox(s, ss, you, v) : ''));
     const nothing = !here.length && !atCampfire && !ss;
     const allDone = here.length > 0 && here.every((c) => c.done) && !atCampfire && !ss;
-    fill(slots.note, [nothing, allDone], () => (nothing ? h('p', { class: 'note' }, 'Nothing for you here. Check your chore list for where to go.')
+    fill(slots.note, [nothing, allDone], () => (nothing ? h('p', { class: 'note' }, 'Nothing for you here. Check My rooms (or the 🗺 Map) for where to go.')
       : allDone ? h('p', { class: 'note' }, 'All done here ✓') : ''));
   }
 
   function stationChore(c, v) {
     const st = v.station;
     const line = (cls, ...kids) => h('div', { class: `chore-here ${cls}` }, ...kids);
-    const go = (label, onclick) => h('button', { type: 'button', class: 'primary btn-big', onclick }, label);
+    const go = (label, onclick, sub = '') => h('button', { type: 'button', class: 'primary btn-big go-btn', onclick },
+      h('span', {}, label), sub ? h('span', { class: 'go-sub' }, sub) : '');
     if (c.done) return line('done', `✓ ${c.title}`);
-    if (c.kind === 'task') return go(`Start: ${c.title}`, () => openPuzzle(c, v));
+    // scanning reveals it; the state saying what it is lands a moment after the station opens
+    if (c.hidden) return line('wait', 'Unlocking your chore…');
+    if (c.kind === 'task') {
+      return [
+        go(`${choreIcon(c)} Play: ${c.title}`, () => openPuzzle(c, v), `Phone game, about 2 minutes. ${gameDetail(c)}`),
+        h('p', { class: 'small warn go-warn' }, 'One try: lose it (or quit) and it moves to another room.'),
+      ];
+    }
+    if (c.kind === 'act') return go(`${choreIcon(c)} ${c.title}`, () => openAct(c, v), c.seconds ? `Activity, ${fmtSecs(c.seconds)}` : '');
     if (c.kind === 'photo') {
       if (c.pending) {
         return line('wait', h('b', {}, `📷 ${c.title}`), h('div', { class: 'small' }, `Waiting for ${ui.partnerOf[c.id] ?? 'your partner'} to say yes on their phone.`),
@@ -1469,12 +1612,35 @@
       h('p', { class: 'small muted' }, 'Time left: ', countdown(s.storm.endsAt, { done: '0:00' })));
   }
 
-  // ---- puzzles
+  // ---- phone games
 
+  /**
+   * A phone game's one-line rule. The catalog's text predates "one try": hold said letting go pauses it, and blackjack
+   * didn't say 3 losses end it. Both lose the game now, so say so (and leave any newer catalog text alone).
+   */
+  function gameDetail(c) {
+    const d = c.detail ?? '';
+    if (c.puzzle === 'hold') return d.replace('Let go and it pauses.', 'Let go for more than a second and you lose.');
+    if (c.puzzle === 'blackjack' && d === 'Beat the dealer 3 times.') return 'Beat the dealer 3 times before the dealer beats you 3 times.';
+    return d;
+  }
+
+  /** Games that run in real time: a photo or talk check popped over them would lose the game, so checks wait. */
+  const REALTIME_GAMES = new Set(['hold', 'snake']);
+
+  /**
+   * A phone game: window.LakeGames[puzzle](el, { done, fail }) → cleanup, from games.js, or one of the old built-in
+   * puzzles a saved game can still deal (order, simon, match). choreStart goes out as it opens, choreDone once the
+   * game calls done(). Losing (fail()) or quitting a started game sends choreFail: no second try here, the server moves
+   * the game to another room. A Campfire, a storm or a pause closes it without counting as a loss (interruptGame).
+   */
   function openPuzzle(chore, back) {
-    const p = { kind: 'puzzle', chore, back, closed: false, timers: new Set(), startedAt: 0, finishing: false };
+    const p = { kind: 'puzzle', chore, back, closed: false, timers: new Set(), startedAt: 0, pausedAt: 0, finishing: false, losing: false, ended: false, stop: null };
+    const game = typeof window.LakeGames?.[chore.puzzle] === 'function' ? window.LakeGames[chore.puzzle] : null;
+    const builtin = game ? null : PUZZLES[chore.puzzle];
     const status = h('p', { class: 'pz-status' });
-    const area = h('div', { class: 'pz-area' });
+    const area = h('div', { class: game ? 'pz-game' : 'pz-area' });
+    const peek = slot();
     p.say = (text) => { status.textContent = text; };
     p.later = (fn, ms) => {
       const t = setTimeout(() => {
@@ -1483,101 +1649,270 @@
       }, ms);
       p.timers.add(t);
     };
+    p.stopGame = () => {
+      const stop = p.stop;
+      p.stop = null;
+      try { stop?.(); } catch (err) { console.warn('[lake] game cleanup', err); }
+    };
     p.cleanup = () => {
       p.closed = true;
+      session.del(KEY_PLAYING);
+      ui.confirmOver = false;
       for (const t of p.timers) clearTimeout(t);
       p.timers.clear();
+      p.stopGame();
     };
     p.finish = () => finishPuzzle(p, status);
+    p.lose = (how) => losePuzzle(p, how);
+    p.update = () => {
+      // the server moves the start on by however long the game was paused; so does this, for the wait in finishPuzzle
+      const paused = !!store.state?.paused;
+      if (paused && !p.pausedAt) p.pausedAt = Date.now();
+      else if (!paused && p.pausedAt) {
+        if (p.startedAt) p.startedAt += Date.now() - p.pausedAt;
+        p.pausedAt = 0;
+      }
+      // a photo or talk check waiting on me: offer it here instead of popping it over the game
+      const s = store.state;
+      const calm = !REALTIME_GAMES.has(chore.puzzle);
+      const waiting = calm && s?.you?.status === 'alive' ? s.you.confirms.filter((c) => !ui.answered.has(c.requestId)) : [];
+      fill(peek, [waiting.map((c) => c.kind), ui.confirmOver], () => (waiting.length && !ui.confirmOver ? h('button', {
+        type: 'button',
+        class: 'waiting-banner',
+        onclick: () => {
+          for (const c of waiting) ui.snoozed.delete(c.requestId);
+          ui.confirmOver = true;
+          render();
+        },
+      }, `${waitingLabel(waiting)}: answer`) : ''));
+    };
     p.root = h('div', { class: 'pz' },
-      h('div', { class: 'pz-head' }, h('div', { class: 'kicker' }, back.station.name), h('h1', {}, chore.title)),
+      peek,
+      h('div', { class: 'pz-bar' },
+        h('div', { class: 'pz-head' },
+          h('div', { class: 'kicker' }, `${choreIcon(chore)} ${back.station.name}`),
+          h('h1', {}, chore.title),
+          gameDetail(chore) ? h('p', { class: 'pz-detail' }, gameDetail(chore)) : ''),
+        h('button', { type: 'button', class: 'pz-quit', onclick: () => quitPuzzle(p) }, 'Quit')),
       status,
-      area,
-      h('div', { class: 'pz-foot' }, h('button', { type: 'button', class: 'btn-big', onclick: () => showView(back) }, 'Cancel')));
-    area.replaceChildren(...[(PUZZLES[chore.puzzle] ?? holdPuzzle)(p)].flat());
+      area);
+    // on screen first, so a game that measures its box sees its real size
     showView(p);
+    if (!game && !builtin) {
+      // games.js didn't load (or is older than this chore): nothing to play, so don't start the clock
+      area.className = 'pz-area';
+      area.replaceChildren(h('div', { class: 'note' }, 'This game didn’t load. Reload the page and try again.',
+        h('div', {}, h('button', { type: 'button', class: 'primary btn-big', style: 'margin-top:12px', onclick: () => location.reload() }, 'Reload'))));
+      return;
+    }
+    try {
+      if (game) {
+        const stop = game(area, {
+          done: () => { if (!p.closed) p.finish(); },
+          fail: () => { if (!p.closed) p.lose('lost'); },
+        });
+        p.stop = typeof stop === 'function' ? stop : null;
+      } else {
+        area.replaceChildren(...[builtin(p)].flat());
+      }
+    } catch (err) {
+      console.error('[lake] game', chore.puzzle, err);
+      toast('That game hit a snag. Try again.', 'error');
+      showView(back);
+      return;
+    }
     call('choreStart', { choreId: chore.id, code: back.code }).then((res) => {
       if (p.closed) return;
       if (!res.ok) {
         toast(res.error, 'error');
         showView(back);
-      } else p.startedAt = Date.now();
+      } else {
+        p.startedAt = Date.now();
+        // until it's won, lost or closed: a reload in between counts as quitting (leftGameCheck)
+        session.set(KEY_PLAYING, JSON.stringify({ game: store.state?.gameNo, choreId: chore.id, code: back.code, stationId: back.station.id, at: Date.now() }));
+      }
     });
   }
 
+  /** The Quit button. Quitting a game the server saw start counts as losing it. */
+  function quitPuzzle(p) {
+    if (p.closed || p.ended || p.losing) return;
+    if (p.finishing) {
+      if (confirm('Your win is still being saved. Leave anyway? You’d have to play it again.')) showView(p.back);
+      return;
+    }
+    if (!p.startedAt) return showView(p.back); // not started yet, so nothing to lose
+    if (!confirm('Quit? It counts as a loss and this game moves to another room.')) return;
+    p.lose('quit');
+  }
+
+  /**
+   * A Campfire, a storm or a pause takes over the screen: stop a running phone game, without choreFail (it's not a
+   * loss). A game already won or lost is left to finish. Returns true if it stopped one.
+   */
+  function interruptGame(why) {
+    const p = ui.view;
+    if (p?.kind !== 'puzzle' || p.ended || p.finishing || p.losing) return false;
+    p.cleanup();
+    ui.view = p.back;
+    toast(`Your game stopped for the ${why}. That’s not a loss: play it again when you’re ready.`);
+    return true;
+  }
+
+  /**
+   * A phone game this tab left in the middle by reloading (or the phone dropping the page) counts as quitting it, like
+   * Quit: otherwise a reload would be a free restart. Runs once per page load, on the first state that knows us. Not a
+   * loss if a Campfire or a pause is on now (those stop a game without it counting) or the game has moved on since.
+   */
+  async function leftGameCheck(s) {
+    if (ui.leftChecked || !s?.me) return;
+    ui.leftChecked = true;
+    const raw = session.get(KEY_PLAYING);
+    if (!raw) return;
+    session.del(KEY_PLAYING);
+    let rec = null;
+    try { rec = JSON.parse(raw); } catch { return; }
+    const c = s.you?.chores.find((x) => x.id === rec?.choreId);
+    const fresh = Date.now() - Number(rec?.at ?? 0) < 15 * 60 * 1000;
+    if (!c || c.done || c.kind !== 'task' || c.stationId !== rec.stationId || rec.game !== s.gameNo) return;
+    if (s.phase !== 'play' || s.paused || s.you.status === 'dead' || !fresh || ui.view?.kind === 'puzzle') return;
+    const res = await call('choreFail', { choreId: c.id, code: rec.code });
+    if (!res.ok) return;
+    SFX.buzz();
+    const st = store.state?.stations.find((x) => x.name === res.movedTo);
+    $('#modal').replaceChildren(h('div', { class: 'modal-box' },
+      h('h1', {}, '🏳️ You left a game'),
+      h('p', {}, `The page reloaded in the middle of ${c.title}. That counts as quitting, so it moved to `, h('b', {}, `the ${res.movedTo}`), '.'),
+      h('p', { class: 'small muted' }, 'It’s hidden again until you scan that room. Next time, finish the game before leaving the page.'),
+      h('div', { class: 'row two' },
+        h('button', { type: 'button', class: 'primary btn-big', onclick: closeModal }, 'OK'),
+        st ? h('button', { type: 'button', class: 'btn-big', onclick: () => { closeModal(); openMap(st.id); } }, '🗺 Map') : '')));
+    $('#modal').hidden = false;
+  }
+
   async function finishPuzzle(p, status) {
-    if (p.finishing || p.closed) return;
+    if (p.finishing || p.losing || p.closed) return;
     p.finishing = true;
+    session.del(KEY_PLAYING); // won: a reload while it saves just means playing it again, not a loss
     p.say('Nice! Saving…');
-    while (!p.startedAt && !p.closed) await sleep(150);
-    // The server wants a minimum time between start and done; wait out the rest if the player was quick.
-    const wait = p.startedAt + (PUZZLE_MIN[p.chore.puzzle] ?? 3) * 1000 + 400 - Date.now();
-    if (wait > 0) await sleep(wait);
-    if (p.closed) return;
+    for (;;) {
+      if (p.closed) return;
+      // the server wants a minimum time between start and done (paused time doesn't count): wait out the rest
+      const wait = p.startedAt && !p.pausedAt ? p.startedAt + (PUZZLE_MIN[p.chore.puzzle] ?? 3) * 1000 + 400 - Date.now() : 150;
+      if (p.startedAt && !p.pausedAt && wait <= 0) break;
+      // a lucky crack or a fast Wordle can be won well before then: show it counting down, so nobody thinks it hung
+      // and leaves (which would throw the win away)
+      p.say(p.startedAt && wait > 1500 ? `Nice! Saving in ${Math.ceil(wait / 1000)} s… Don’t leave yet.` : 'Nice! Saving…');
+      await sleep(Math.min(wait, 1000));
+    }
     const res = await call('choreDone', { choreId: p.chore.id, code: p.back.code });
     if (p.closed) return;
     if (!res.ok) {
       p.finishing = false;
       p.say(res.error);
+      toast(res.error, 'error');
       status.append(' ', h('button', { type: 'button', class: 'small', onclick: () => p.finish() }, 'Try again'));
       return;
     }
+    p.ended = true;
+    p.stopGame(); // the ding comes with the state that says it's done
     p.root.replaceChildren(h('div', { class: 'pz-done' }, h('div', { class: 'pz-check' }, '✓'), h('div', {}, 'Done!'), h('div', { class: 'small muted' }, p.chore.title)));
     p.later(() => showView(p.back), 1300);
   }
 
-  function holdPuzzle(p) {
-    const bar = h('div', { class: 'pz-bar-fill' });
-    const btn = h('button', { type: 'button', class: 'pz-hold' }, 'Hold');
-    p.say('Press and hold for 8 seconds. Letting go starts over.');
-    pressHold(btn, 8000, {
-      onStart: () => { btn.textContent = 'Keep holding…'; p.say(''); },
-      onProgress: (f) => { bar.style.transform = `scaleX(${f})`; },
-      onCancel: () => {
-        btn.textContent = 'Hold';
-        p.say('Let go too soon. Hold again!');
-        SFX.buzz();
-      },
-      onDone: () => {
-        btn.textContent = '✓';
-        btn.disabled = true;
-        p.finish();
-      },
-    });
-    return [h('div', { class: 'pz-bar' }, bar), btn];
+  /** Lost (the game called fail) or quit: choreFail, then say where the game went. No retry here. */
+  async function losePuzzle(p, how) {
+    if (p.closed || p.ended || p.finishing || p.losing) return;
+    p.losing = true;
+    p.stopGame();
+    for (const t of p.timers) clearTimeout(t);
+    p.timers.clear();
+    ui.confirmOver = false;
+    if (how !== 'quit') {
+      SFX.buzz();
+      vibrate([200, 80, 200]);
+    }
+    const body = h('div', { class: 'pz-lost', role: 'status' });
+    p.root.replaceChildren(body);
+    const send = async () => {
+      fill(body, ['saving'], () => lostScreen(p, how, null, send));
+      const res = await call('choreFail', { choreId: p.chore.id, code: p.back.code });
+      if (res.ok) {
+        p.ended = true;
+        session.del(KEY_PLAYING);
+      }
+      if (p.closed) {
+        // a Campfire closed the screen meanwhile: still say where the game went
+        if (res.ok) toast(`${p.chore.title} moved to the ${res.movedTo}. Find it there.`, 'error');
+        return;
+      }
+      fill(body, [res.ok, res.movedTo, res.error], () => lostScreen(p, how, res, send));
+      render(); // a check held back during the game can show now
+    };
+    await send();
   }
 
+  function lostScreen(p, how, res, retry) {
+    const quit = how === 'quit';
+    const head = [
+      h('div', { class: 'pz-lost-icon', 'aria-hidden': 'true' }, quit ? '🏳️' : '💥'),
+      h('h1', {}, quit ? 'You quit' : 'You lost'),
+      h('div', { class: 'small muted' }, `${choreIcon(p.chore)} ${p.chore.title}`),
+    ];
+    if (!res) return [...head, h('p', { class: 'muted' }, 'Moving this game to another room…')];
+    if (!res.ok) {
+      return [...head,
+        h('p', { class: 'error' }, res.error),
+        h('div', { class: 'pz-lost-btns' },
+          h('button', { type: 'button', class: 'primary btn-big', onclick: retry }, 'Try again'),
+          h('button', { type: 'button', class: 'btn-big', onclick: () => showView(p.back) }, 'Back'))];
+    }
+    const st = store.state?.stations.find((x) => x.name === res.movedTo);
+    return [...head,
+      h('p', { class: 'pz-lost-line' }, quit ? 'That counts as a loss: this game moved to ' : 'This game moved to ', h('b', {}, `the ${res.movedTo}`), '. Find it there.'),
+      st?.where ? h('p', { class: 'muted' }, st.where) : '',
+      h('p', { class: 'small muted' }, 'It’s hidden again until you scan that room, and you play it from the start there.'),
+      h('div', { class: 'pz-lost-btns' },
+        h('button', { type: 'button', class: 'primary btn-big', onclick: () => showView(null) }, 'Back to my rooms'),
+        st ? h('button', { type: 'button', class: 'btn-big', onclick: () => openMap(st.id) }, '🗺 Show it on the map') : '')];
+  }
+
+  const ORDER_N = 16;
   function orderPuzzle(p) {
     let next = 1;
-    p.say('Tap 1 to 10 in order.');
-    const buttons = shuffle([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]).map((n) => h('button', {
-      type: 'button',
-      class: 'pz-num',
-      onclick: (e) => {
-        const b = e.currentTarget;
-        if (next > 10 || n < next) return;
-        if (n === next) {
-          b.classList.add('ok');
-          SFX.blip();
-          next += 1;
-          if (next > 10) p.finish();
-          else p.say(`Next: ${next}`);
-          return;
-        }
-        SFX.buzz();
-        b.classList.add('bad');
-        p.later(() => b.classList.remove('bad'), 350);
-        next = 1;
-        for (const x of buttons) x.classList.remove('ok');
-        p.say(`Oops, that was ${n}. Start again from 1.`);
-      },
-    }, n));
-    return h('div', { class: 'pz-grid' }, buttons);
+    let locked = false; // a moment after a wrong tap, while the board reshuffles
+    const grid = h('div', { class: 'pz-grid' });
+    const deal = () => grid.replaceChildren(...shuffle(Array.from({ length: ORDER_N }, (_, i) => i + 1)).map((n) =>
+      h('button', { type: 'button', class: 'pz-num', onclick: (e) => tap(n, e.currentTarget) }, n)));
+    function tap(n, b) {
+      if (locked || next > ORDER_N || n < next) return;
+      if (n === next) {
+        b.classList.add('ok');
+        SFX.blip();
+        next += 1;
+        if (next > ORDER_N) p.finish();
+        else p.say(`Next: ${next}`);
+        return;
+      }
+      SFX.buzz();
+      b.classList.add('bad');
+      locked = true;
+      next = 1;
+      p.say(`Oops, that was ${n}. Shuffled! Start again from 1.`);
+      p.later(() => {
+        locked = false;
+        deal();
+      }, 450);
+    }
+    deal();
+    p.say(`Tap 1 to ${ORDER_N} in order. A wrong tap shuffles the board.`);
+    return grid;
   }
 
   const PADS = [{ color: '#3fb950', freq: 392 }, { color: '#f85149', freq: 330 }, { color: '#d29922', freq: 262 }, { color: '#58a6ff', freq: 523 }];
+  const SIMON_STEPS = 7;
   function simonPuzzle(p) {
-    const seq = Array.from({ length: 5 }, () => Math.floor(Math.random() * PADS.length));
+    const seq = Array.from({ length: SIMON_STEPS }, () => Math.floor(Math.random() * PADS.length));
     let pos = 0;
     let listening = false;
     const light = (i, ms) => {
@@ -1596,21 +1931,21 @@
       listening = false;
       pos = 0;
       p.say('Watch the pattern…');
-      seq.forEach((i, k) => p.later(() => light(i, 420), 700 + k * 650));
+      seq.forEach((i, k) => p.later(() => light(i, 340), 700 + k * 540));
       p.later(() => {
         listening = true;
-        p.say('Your turn: repeat it (0 of 5)');
-      }, 700 + seq.length * 650);
+        p.say(`Your turn: repeat it (0 of ${SIMON_STEPS})`);
+      }, 700 + seq.length * 540);
     }
     function press(i) {
       if (!listening) return;
       if (i === seq[pos]) {
-        light(i, 220);
+        light(i, 200);
         pos += 1;
         if (pos === seq.length) {
           listening = false;
           p.finish();
-        } else p.say(`Your turn: repeat it (${pos} of 5)`);
+        } else p.say(`Your turn: repeat it (${pos} of ${SIMON_STEPS})`);
         return;
       }
       listening = false;
@@ -1622,23 +1957,39 @@
     return h('div', { class: 'pz-simon' }, pads);
   }
 
-  const MATCH_ITEMS = ['🦆', '🐟', '🛶', '🌲', '🔥', '⛺', '🐸', '🦉', '🍄', '🌙'];
-  const MATCH_COLORS = ['#3fb950', '#f85149', '#d29922', '#58a6ff'];
+  // Each game draws its 6 pairs from one family of look-alikes, on tiles of near-identical shades, so you have to
+  // actually look. The two sides get their shades independently: only the picture counts.
+  const MATCH_SETS = [
+    ['🐦', '🐤', '🐥', '🐣', '🦆', '🐧', '🦅', '🦉'],
+    ['🌑', '🌒', '🌓', '🌔', '🌕', '🌖', '🌗', '🌘'],
+    ['🌲', '🌳', '🌴', '🎄', '🌵', '🌿', '🌱', '🍀'],
+    ['🐟', '🐠', '🐡', '🦈', '🐬', '🐳', '🐋', '🐙'],
+    ['😀', '😃', '😄', '😁', '😆', '😅', '🙂', '😊'],
+  ];
+  const MATCH_SHADES = [
+    ['#2ea043', '#3fb950', '#56d364', '#238636', '#46954a', '#6fdd8b'],
+    ['#388bfd', '#58a6ff', '#79c0ff', '#1f6feb', '#4493f8', '#a5d6ff'],
+    ['#d29922', '#e3b341', '#f2cc60', '#bb8009', '#c69026', '#eac54f'],
+  ];
+  const MATCH_PAIRS = 6;
   function matchPuzzle(p) {
-    const items = shuffle(MATCH_ITEMS).slice(0, 4);
+    const items = shuffle(MATCH_SETS[Math.floor(Math.random() * MATCH_SETS.length)]).slice(0, MATCH_PAIRS);
+    const shades = MATCH_SHADES[Math.floor(Math.random() * MATCH_SHADES.length)];
     let right = shuffle(items);
-    while (right.every((x, i) => x === items[i])) right = shuffle(items);
+    while (right.some((x, i) => x === items[i])) right = shuffle(items);
+    const leftShades = shuffle(shades);
+    const rightShades = shuffle(shades);
     let pick = null;
     let matched = 0;
-    const tile = (it, onclick) => h('button', { type: 'button', class: 'pz-tile', style: `--c:${MATCH_COLORS[items.indexOf(it)]}`, onclick }, it);
-    const L = items.map((it, i) => tile(it, () => {
+    const tile = (it, color, onclick) => h('button', { type: 'button', class: 'pz-tile', style: `--c:${color}`, onclick }, it);
+    const L = items.map((it, i) => tile(it, leftShades[i], () => {
       if (L[i].classList.contains('done')) return;
       for (const b of L) b.classList.remove('sel');
       pick = i;
       L[i].classList.add('sel');
       SFX.blip();
     }));
-    const R = right.map((it, j) => tile(it, () => {
+    const R = right.map((it, j) => tile(it, rightShades[j], () => {
       if (R[j].classList.contains('done')) return;
       if (pick == null) return p.say('Tap one on the left first.');
       if (right[j] === items[pick]) {
@@ -1656,13 +2007,588 @@
       p.later(() => R[j].classList.remove('bad'), 350);
       L[pick].classList.remove('sel');
       pick = null;
-      p.say('Not a match. Try again.');
+      p.say('Not a match. Look closer!');
     }));
-    p.say('Tap one on the left, then its twin on the right.');
+    p.say('Tap one on the left, then its exact twin on the right.');
     return h('div', { class: 'pz-match' }, h('div', { class: 'pz-col' }, L), h('div', { class: 'pz-col' }, R));
   }
 
-  const PUZZLES = { hold: holdPuzzle, order: orderPuzzle, simon: simonPuzzle, match: matchPuzzle };
+  /** The old built-in puzzles, still dealt by a game saved before the phone games came in. */
+  const PUZZLES = { order: orderPuzzle, simon: simonPuzzle, match: matchPuzzle };
+
+  // ---- activities: do something for real while a timer runs
+
+  /** The words on an activity's screen. A ghost's talk chore is a silent one on the same screen. */
+  function actWords(c, ghost) {
+    if (c.kind === 'talk') {
+      return {
+        detail: `👻 Ghosts can’t talk. Silently wave at ${c.need ?? 3} different players until the timer runs out.`,
+        note: '',
+        ready: 'Tap Start, then go wave. Not a sound!',
+        running: 'Keep waving. Not a sound!',
+        after: 'Time’s up. Tap Done.',
+        doneLabel: 'Done',
+      };
+    }
+    const skill = SKILL_STATIONS.has(c.stationId);
+    const words = {
+      detail: c.detail ?? '',
+      note: '',
+      ready: 'Tap Start, then keep going until the timer runs out.',
+      running: 'Keep going!',
+      after: 'Time’s up! Tap Done.',
+      doneLabel: 'Done',
+    };
+    if (c.voice && ghost) {
+      return {
+        ...words,
+        detail: c.stationId === 'radio'
+          ? '👻 Ghosts make no sound: lip-sync it into the radio, silently, until the timer runs out.'
+          : '👻 Ghosts make no sound: mime it, silently, until the timer runs out.',
+        note: c.detail ? `The chore: ${c.detail}` : '',
+        ready: c.stationId === 'radio' ? 'Tap Start, then lip-sync. Not a sound!' : 'Tap Start, then mime it. Not a sound!',
+        running: c.stationId === 'radio' ? 'Keep lip-syncing. Not a sound!' : 'Keep miming. Not a sound!',
+      };
+    }
+    if (skill) {
+      return {
+        ...words,
+        ready: 'Tap Start, then play. Keep trying until you do it.',
+        running: 'Keep playing until you do it!',
+        after: 'Did it? Tap “I did it!”. Not yet? Keep playing, then tap it when you do.',
+        doneLabel: 'I did it!',
+      };
+    }
+    if (c.voice) return { ...words, running: 'Keep it going on the radio!' };
+    if (c.stationId === 'campfire') return { ...words, running: 'Keep dancing! No stopping!' };
+    return words;
+  }
+
+  /**
+   * Start → a big countdown of chore.seconds → Done. The countdown stands still while the game is paused (the server
+   * moves the start time on by the pause), and a Campfire closes the screen like a puzzle. `back` is the station
+   * screen, or null for a ghost's silent talk chore, which has no station and no code.
+   */
+  function openAct(chore, back) {
+    const ghost = store.state?.you?.status === 'ghost';
+    const w = actWords(chore, ghost);
+    const total = Math.max(1, chore.seconds ?? 30) * 1000;
+    const v = { kind: 'act', chore, back, closed: false, phase: 'ready', left: total, last: 0, iv: 0, timers: new Set() };
+    const withCode = (extra) => (back?.code ? { ...extra, code: back.code } : extra);
+    const status = h('p', { class: 'pz-status' }, w.ready);
+    const time = h('div', { class: 'act-time' }, fmtLeft(total));
+    const sub = h('div', { class: 'act-sub' }, 'Ready');
+    const ring = h('div', { class: 'act-ring', style: '--f:0', role: 'timer', 'aria-label': 'Time left' }, h('div', { class: 'act-face' }, time, sub));
+    const start = h('button', { type: 'button', class: 'primary btn-big', onclick: begin }, '▶ Start');
+    const done = h('button', { type: 'button', class: 'yes-btn btn-big', hidden: true, disabled: true, onclick: finish }, w.doneLabel);
+    const later = (fn, ms) => {
+      const t = setTimeout(() => {
+        v.timers.delete(t);
+        if (!v.closed) fn();
+      }, ms);
+      v.timers.add(t);
+    };
+    v.cleanup = () => {
+      v.closed = true;
+      clearInterval(v.iv);
+      for (const t of v.timers) clearTimeout(t);
+      v.timers.clear();
+    };
+    const leave = () => {
+      if (v.phase === 'running' && !confirm('Stop now? The timer starts over next time.')) return;
+      showView(back);
+    };
+
+    async function begin() {
+      start.disabled = true;
+      const res = await call('choreStart', withCode({ choreId: chore.id }));
+      if (v.closed) return;
+      if (!res.ok) {
+        start.disabled = false;
+        return toast(res.error, 'error');
+      }
+      v.phase = 'running';
+      v.left = total;
+      v.last = Date.now();
+      start.hidden = true;
+      done.hidden = false;
+      status.textContent = w.running;
+      sub.textContent = 'left';
+      SFX.blip();
+      v.iv = setInterval(step, 200);
+      step();
+    }
+
+    function step() {
+      if (v.closed || v.phase !== 'running') return;
+      const t = Date.now();
+      if (!store.state?.paused) v.left -= t - v.last;
+      v.last = t;
+      const left = Math.max(0, v.left);
+      const text = fmtLeft(left);
+      if (time.textContent !== text) time.textContent = text;
+      ring.style.setProperty('--f', String(1 - left / total));
+      if (left > 0) return;
+      clearInterval(v.iv);
+      v.phase = 'over';
+      ring.classList.add('over');
+      sub.textContent = 'Time’s up';
+      status.textContent = w.after;
+      done.disabled = false;
+      SFX.stage();
+      vibrate([80, 60, 80]);
+    }
+
+    async function finish() {
+      done.disabled = true;
+      const res = await call('choreDone', withCode({ choreId: chore.id }));
+      if (v.closed) return;
+      if (!res.ok) {
+        done.disabled = false;
+        status.textContent = res.error;
+        return;
+      }
+      v.phase = 'saved';
+      v.root.replaceChildren(h('div', { class: 'pz-done' }, h('div', { class: 'pz-check' }, '✓'), h('div', {}, 'Done!'), h('div', { class: 'small muted' }, chore.title)));
+      later(() => showView(back), 1300);
+    }
+
+    const place = back ? back.station.name : chore.kind === 'talk' ? '💬 Anywhere' : chore.stationName ?? '';
+    v.root = h('div', { class: 'pz act' },
+      h('div', { class: 'pz-head' }, h('div', { class: 'kicker' }, place), h('h1', {}, `${chore.kind === 'talk' ? '👋' : choreIcon(chore)} ${chore.title}`)),
+      status,
+      h('div', { class: 'pz-area' },
+        h('div', { class: 'act-detail' }, h('p', {}, w.detail), w.note ? h('p', { class: 'small muted' }, w.note) : ''),
+        ring,
+        h('div', { class: 'act-btns' }, start, done)),
+      h('div', { class: 'pz-foot' }, h('button', { type: 'button', class: 'btn-big', onclick: leave }, 'Cancel')));
+    showView(v);
+  }
+
+  // ---- the talk chore: no station, done from the chore list
+
+  function openTalk(choreId) {
+    const s = store.state;
+    const c = s?.you?.chores.find((x) => x.id === choreId);
+    if (!c || c.done || s.phase !== 'play') return;
+    if (s.you.status === 'ghost') return openAct(c, null);
+    const v = { kind: 'talk', choreId, closing: false };
+    const progress = slot();
+    const ask = slot();
+    const pick = box();
+    v.root = h('div', { class: 'sheet-inner' },
+      sheetHead(() => showView(null)),
+      h('div', { class: 'station-head' }, h('div', { class: 'kicker' }, '💬 Anywhere'), h('h1', {}, c.title), h('p', { class: 'muted' }, c.detail ?? '')),
+      progress, ask, pick);
+    v.update = () => {
+      const st = store.state;
+      const ch = st?.you?.chores.find((x) => x.id === choreId);
+      if (!ch) return;
+      const partner = ch.pending ? ui.partnerOf[ch.id] ?? null : null;
+      fill(progress, [ch.progress, ch.need, ch.done], () => talkProgress(ch));
+      fill(ask, [ch.done, ch.pending, ch.question, partner], () => talkAsk(ch, partner));
+      const mates = st.players.filter((p) => p.inGame && !p.out && p.id !== st.me.id);
+      fill(pick, [ch.done, ch.pending ? ui.talkTo[ch.id] ?? null : null, ui.talked[ch.id] ?? [], mates.map((m) => [m.id, m.name, m.color])],
+        () => talkPicker(ch, mates));
+      if (ch.done && !v.closing) {
+        v.closing = true;
+        setTimeout(() => { if (ui.view === v) showView(null); }, 1800);
+      }
+    };
+    showView(v);
+  }
+
+  function talkProgress(ch) {
+    const need = ch.need ?? 3;
+    const got = Math.min(need, ch.progress ?? 0);
+    return h('div', { class: 'talk-progress' },
+      h('div', { class: 'talk-dots', 'aria-hidden': 'true' }, Array.from({ length: need }, (_, i) => h('span', { class: i < got ? 'on' : '' }, i < got ? '✓' : ''))),
+      h('div', { class: 'talk-count' }, ch.done ? `✓ Done! ${need} of ${need} said yes` : `${got} of ${need} said yes`));
+  }
+
+  function talkAsk(ch, partner) {
+    if (ch.done) return h('p', { class: 'ok-line center' }, 'All done ✓ Nice chatting!');
+    if (!ch.pending) return h('p', { class: 'note' }, 'Find someone in person, pick them below, then ask them the question that shows up here.');
+    const who = partner ?? 'them';
+    return h('section', { class: 'talk-ask' },
+      h('div', { class: 'kicker' }, `Ask ${who}`),
+      h('p', { class: 'talk-q' }, `“${ch.question ?? '…'}”`),
+      h('p', { class: 'talk-wait' }, `Waiting for ${who} to tap Yes on their phone…`));
+  }
+
+  function talkPicker(ch, mates) {
+    if (ch.done) return '';
+    const talked = ui.talked[ch.id] ?? [];
+    const current = ch.pending ? ui.talkTo[ch.id] : null;
+    return [
+      h('h2', {}, ch.pending ? 'Or ask someone else' : 'Who are you talking to?'),
+      mates.length
+        ? h('div', { class: 'pick-grid' }, mates.map((m) => {
+          const did = talked.includes(m.id);
+          return h('button', {
+            type: 'button',
+            class: `pick ${m.id === current ? 'sel' : ''}`,
+            disabled: did,
+            onclick: (e) => askTalk(ch, m, e.currentTarget),
+          }, pdot(m.color), m.name, did ? ' ✓' : '');
+        }))
+        : h('p', { class: 'muted' }, 'Nobody else is in the game right now.'),
+      h('p', { class: 'small muted' }, 'Each person counts once. Picking someone new replaces the one you’re waiting on.'),
+    ];
+  }
+
+  async function askTalk(ch, m, btn) {
+    btn.disabled = true;
+    // set before asking: the state with the new question can land before the answer does
+    const before = [ui.partnerOf[ch.id], ui.talkTo[ch.id]];
+    ui.partnerOf[ch.id] = m.name;
+    ui.talkTo[ch.id] = m.id;
+    const res = await call('talk', { choreId: ch.id, partnerId: m.id });
+    if (!res.ok) {
+      [ui.partnerOf[ch.id], ui.talkTo[ch.id]] = before;
+      if (/already talked/i.test(res.error ?? '')) ui.talked[ch.id] = [...new Set([...(ui.talked[ch.id] ?? []), m.id])];
+      toast(res.error, 'error');
+      btn.disabled = false;
+      return render();
+    }
+    SFX.blip();
+    render();
+  }
+
+  // ---- the house map: where my rooms are (never anything about anyone else)
+
+  const MAP_TABS = [['main', 'Main'], ['upstairs', 'Upstairs'], ['basement', 'Basement'], ['other', 'Outside']];
+  const tabOf = (st) => st?.map?.floor ?? 'other';
+
+  /** Per enabled station: my chores there, the Campfire, the storm and whether I scanned it last. */
+  function mapMarks(s) {
+    const { rooms } = myRooms(s, s.you);
+    const last = lastStationId(s);
+    const marks = {};
+    for (const st of s.stations) {
+      const r = rooms.find((x) => x.id === st.id);
+      const storm = s.storm?.stations.find((x) => x.id === st.id);
+      const open = r ? r.chores.filter((c) => !c.done) : [];
+      marks[st.id] = {
+        todo: open.length,
+        total: r?.chores.length ?? 0,
+        hidden: open.filter((c) => c.hidden).length,
+        titles: open.filter((c) => !c.hidden).map((c) => `${choreIcon(c)} ${choreText(c)}`),
+        fire: st.id === s.campfire?.id,
+        storm: storm ? (storm.secured ? 'secured' : 'on') : null,
+        last: st.id === last,
+      };
+    }
+    return marks;
+  }
+
+  const tabTodo = (s, marks, tab) => s.stations.filter((st) => tabOf(st) === tab).reduce((n, st) => n + (marks[st.id]?.todo ?? 0), 0);
+
+  function busiestTab(s, marks) {
+    let best = 'main';
+    let most = 0;
+    for (const [id] of MAP_TABS) {
+      const n = tabTodo(s, marks, id);
+      if (n > most) [best, most] = [id, n];
+    }
+    return best;
+  }
+
+  /** The marker: amber count to do, green ✓ all done, gray dot nothing for me; 🔥 Campfire; red pulse storm; ring last scan. */
+  function mapBadge(m, extra = '') {
+    const cls = ['mk', m.todo ? 'todo' : m.total ? 'ok' : 'none', m.fire ? 'fire' : '', m.storm === 'on' ? 'storm' : '', m.last ? 'last' : '', extra]
+      .filter(Boolean).join(' ');
+    if (m.fire) {
+      return h('span', { class: cls }, '🔥', m.todo ? h('span', { class: 'mk-n' }, m.todo) : m.total ? h('span', { class: 'mk-n ok' }, '✓') : '');
+    }
+    return h('span', { class: cls }, m.todo ? String(m.todo) : m.total ? '✓' : '');
+  }
+
+  const pinStatus = (m) => (m.todo ? `${m.todo} to do` : m.total ? 'done' : 'nothing for you');
+
+  function mapPin(st, m, v) {
+    return h('button', {
+      type: 'button',
+      // a name near an edge hangs inward, so it never runs off the map
+      class: `pin ${st.map.x > 72 ? 'lab-r' : st.map.x < 28 ? 'lab-l' : ''} ${v.sel === st.id ? 'sel' : ''}`,
+      style: `left:${st.map.x}%;top:${st.map.y}%`,
+      'data-id': st.id,
+      'aria-label': `${st.name}: ${pinStatus(m)}`,
+      onclick: () => v.pick(st.id),
+    }, mapBadge(m), h('span', { class: 'pin-label' }, st.name));
+  }
+
+  function mapInfo(st, m) {
+    const lines = [];
+    if (m.storm === 'on') lines.push(h('p', { class: 'map-storm' }, '⛈ Storm station! Two different players must secure the two storm stations.'));
+    if (m.storm === 'secured') lines.push(h('p', { class: 'small ok-text' }, '⛈ Secured for this storm'));
+    if (m.fire) lines.push(h('p', {}, '🔥 The Campfire: everyone meets here, and the bell is here.'));
+    if (m.todo) {
+      lines.push(h('p', { class: 'map-todo' }, `${m.todo} to do here`));
+      if (m.titles.length) lines.push(h('ul', { class: 'map-titles' }, m.titles.map((t) => h('li', {}, t))));
+      if (m.hidden) lines.push(h('p', { class: 'small muted' }, `🔒 ${m.titles.length ? `${plural(m.hidden, 'more chore')} hidden` : 'Hidden'} until you scan the room.`));
+    } else if (m.total) lines.push(h('p', { class: 'ok-text' }, '✓ Your chores here are done'));
+    else lines.push(h('p', { class: 'muted' }, 'Nothing for you here.'));
+    if (m.last) lines.push(h('p', { class: 'small muted' }, '📍 You scanned this one last.'));
+    return h('section', { class: 'box map-info' },
+      h('div', { class: 'row' }, mapBadge({ ...m, last: false }, 'inline'), h('div', { class: 'grow' }, h('b', { class: 'map-info-name' }, st.name), h('div', { class: 'small muted' }, st.where))),
+      lines);
+  }
+
+  const mapLegend = () => h('div', { class: 'map-legend small muted' },
+    h('span', {}, mapBadge({ todo: 2, total: 2 }, 'inline mini'), 'to do'),
+    h('span', {}, mapBadge({ todo: 0, total: 1 }, 'inline mini'), 'done'),
+    h('span', {}, mapBadge({ todo: 0, total: 0 }, 'inline mini'), 'nothing for you'),
+    h('span', {}, '🔥 Campfire'),
+    h('span', {}, mapBadge({ todo: 0, total: 0, storm: 'on' }, 'inline mini'), 'storm'),
+    h('span', {}, mapBadge({ todo: 0, total: 0, last: true }, 'inline mini'), 'scanned last'));
+
+  /** The house map in a sheet. `focusId` opens it on that station (picked, and scrolled to when zoomed in). */
+  function openMap(focusId = null) {
+    const s = store.state;
+    if (!s?.you) return;
+    const back = ui.view?.kind === 'station' ? ui.view : null;
+    const focus = focusId ? s.stations.find((x) => x.id === focusId) : null;
+    const last = s.stations.find((x) => x.id === lastStationId(s));
+    const v = { kind: 'map', back, sel: focus?.id ?? null, tab: focus ? tabOf(focus) : ui.mapTab ?? (last ? tabOf(last) : busiestTab(s, mapMarks(s))), center: !!focus };
+    const tabs = h('div', { class: 'map-tabs', role: 'tablist' });
+    const tools = slot();
+    const img = h('img', { class: 'map-img', alt: '', draggable: false });
+    const pins = h('div', { class: 'map-pins' });
+    const canvas = h('div', { class: 'map-canvas' }, img, pins);
+    const scroller = h('div', { class: 'map-scroll' }, canvas);
+    const list = slot();
+    const info = slot();
+    v.root = h('div', { class: 'sheet-inner map-sheet' },
+      sheetHead(() => showView(back)),
+      h('h1', { class: 'sheet-title' }, '🗺 Map'),
+      tabs, tools, scroller, list, info, mapLegend());
+    v.pick = (id) => {
+      v.sel = v.sel === id ? null : id;
+      render();
+    };
+    v.update = () => {
+      const st = store.state;
+      if (!st?.you) return;
+      const marks = mapMarks(st);
+      const floor = v.tab !== 'other';
+      const counts = MAP_TABS.map(([id]) => tabTodo(st, marks, id));
+      fill(tabs, [v.tab, counts], () => MAP_TABS.map(([id, label], i) => h('button', {
+        type: 'button',
+        role: 'tab',
+        'aria-selected': String(id === v.tab),
+        class: `map-tab ${id === v.tab ? 'on' : ''}`,
+        onclick: () => {
+          v.tab = id;
+          ui.mapTab = id;
+          v.sel = null;
+          render();
+        },
+      }, label, counts[i] ? h('span', { class: 'tab-n' }, counts[i]) : '')));
+      scroller.hidden = !floor;
+      if (floor && img.dataset.floor !== v.tab) {
+        img.dataset.floor = v.tab;
+        img.src = `/lake/maps/${v.tab}.jpg`;
+        img.alt = `${MAP_TABS.find(([id]) => id === v.tab)[1]} floor plan`;
+        scroller.scrollLeft = 0;
+      }
+      canvas.classList.toggle('zoomed', !!ui.mapZoom);
+      const here = st.stations.filter((x) => tabOf(x) === v.tab);
+      fill(tools, [floor, ui.mapZoom], () => (floor ? h('div', { class: 'map-tools' },
+        h('span', { class: 'small muted grow' }, ui.mapZoom ? 'Swipe sideways to see the rest.' : 'Tap a marker to see what’s there.'),
+        h('button', {
+          type: 'button',
+          class: 'map-zoom',
+          onclick: () => {
+            ui.mapZoom = !ui.mapZoom;
+            v.center = true;
+            render();
+          },
+        }, ui.mapZoom ? '↙ Fit' : '🔍 Zoom in')) : ''));
+      const key = [v.tab, v.sel, here.map((x) => [x.id, marks[x.id]])];
+      fill(pins, floor ? key : null, () => (floor ? here.filter((x) => x.map).map((x) => mapPin(x, marks[x.id], v)) : ''));
+      fill(list, floor ? null : key, () => {
+        if (floor) return '';
+        if (!here.length) return h('p', { class: 'note' }, 'No outside stations are in this game.');
+        return h('ul', { class: 'map-list' }, here.map((x) => h('li', {},
+          h('button', { type: 'button', class: `map-row ${v.sel === x.id ? 'sel' : ''}`, onclick: () => v.pick(x.id) },
+            mapBadge(marks[x.id], 'inline'),
+            h('span', { class: 'grow' }, h('b', {}, x.name), h('span', { class: 'map-row-where' }, x.where)),
+            h('span', { class: 'map-row-status' }, pinStatus(marks[x.id]))))));
+      });
+      const sel = here.find((x) => x.id === v.sel);
+      fill(info, sel ? [sel.id, marks[sel.id]] : null, () => (sel ? mapInfo(sel, marks[sel.id]) : ''));
+      if (v.center) {
+        v.center = false;
+        requestAnimationFrame(() => {
+          const pin = v.sel && pins.querySelector(`[data-id="${v.sel}"]`);
+          if (pin && ui.view === v) scroller.scrollLeft = pin.offsetLeft - scroller.clientWidth / 2;
+        });
+      }
+    };
+    showView(v);
+  }
+
+  // ---- the in-app QR scanner
+
+  /** What a scanned QR says: { code } for a station card, { join: true } for the join poster, {} for anything else. */
+  function parseScan(text) {
+    const t = String(text ?? '').trim();
+    if (/^[A-Za-z0-9]{4}$/.test(t)) return t.toUpperCase() === 'JOIN' ? { join: true } : { code: t.toUpperCase() };
+    let u;
+    try {
+      u = new URL(t);
+    } catch {
+      return {};
+    }
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return {};
+    const m = u.pathname.match(/^\/lake\/s\/([A-Za-z0-9]{4})\/?$/);
+    if (m) return { code: m[1].toUpperCase() };
+    if (/^\/lake\/?$/.test(u.pathname)) return { join: true };
+    return {};
+  }
+
+  function cameraError(err) {
+    const name = err?.name ?? '';
+    if (['NotAllowedError', 'SecurityError', 'PermissionDeniedError'].includes(name)) {
+      return 'The camera is blocked for this site. To allow it on an iPhone: tap aA in the address bar → Website Settings → Camera → Allow, then Try again. Or type the code printed under the QR.';
+    }
+    if (['NotFoundError', 'OverconstrainedError', 'DevicesNotFoundError'].includes(name)) return 'No camera found on this device. Type the code printed under the QR instead.';
+    if (['NotReadableError', 'TrackStartError', 'AbortError'].includes(name)) return 'The camera is busy (another app may be using it). Close that and Try again, or type the code printed under the QR.';
+    return 'Couldn’t open the camera. Type the code printed under the QR instead.';
+  }
+
+  /** Full-screen camera that reads station QR codes (window.jsQR) and opens the station, like typing its code. */
+  function openScanner() {
+    const back = ui.view?.kind === 'station' ? ui.view : null;
+    const v = { kind: 'scan', back, stream: null, timer: 0, run: 0, closed: false, said: '', saidAt: 0 };
+    const video = h('video', { class: 'scan-video', autoplay: true, muted: true, playsInline: true });
+    for (const a of ['autoplay', 'muted', 'playsinline']) video.setAttribute(a, '');
+    const canvas = document.createElement('canvas');
+    const msg = h('p', { class: 'scan-msg', role: 'status' });
+    const actions = h('div', { class: 'scan-actions' });
+    const say = (text, bad = false) => {
+      msg.textContent = text;
+      msg.classList.toggle('bad', bad);
+    };
+    const stop = () => {
+      v.run += 1; // a camera still starting is stopped as soon as it arrives
+      clearTimeout(v.timer);
+      v.timer = 0;
+      for (const t of v.stream?.getTracks() ?? []) t.stop();
+      v.stream = null;
+      try { video.pause(); } catch { /* not playing */ }
+      video.srcObject = null;
+    };
+    v.cleanup = () => {
+      v.closed = true;
+      stop();
+      canvas.width = 0;
+      canvas.height = 0;
+    };
+    const typeIt = () => {
+      showView(back);
+      // straight away, inside the tap, so the keyboard comes up
+      document.querySelector('input[aria-label="Station code"]')?.focus();
+    };
+    const typeBtn = () => h('button', { type: 'button', class: 'btn-big', onclick: typeIt }, '⌨️ Type the code instead');
+    const againBtn = (label = 'Try again') => h('button', { type: 'button', class: 'primary btn-big', onclick: start }, label);
+
+    function fail(text) {
+      stop();
+      say(text, true);
+      actions.replaceChildren(againBtn(), typeBtn());
+    }
+
+    async function start() {
+      stop();
+      const run = v.run;
+      actions.replaceChildren(typeBtn());
+      if (!navigator.mediaDevices?.getUserMedia) {
+        return fail(window.isSecureContext === false
+          ? 'The camera only works on the https:// link of the game. Type the code printed under the QR instead.'
+          : 'This browser can’t use the camera here. Type the code printed under the QR instead.');
+      }
+      if (typeof window.jsQR !== 'function') return fail('The scanner didn’t load. Reload the page, or type the code printed under the QR.');
+      say('Starting the camera…');
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+      } catch (err) {
+        if (run === v.run && !v.closed) fail(cameraError(err));
+        return;
+      }
+      if (run !== v.run || v.closed) {
+        for (const t of stream.getTracks()) t.stop();
+        return;
+      }
+      v.stream = stream;
+      video.srcObject = stream;
+      try { await video.play(); } catch { /* muted inline video plays by itself; frames still arrive */ }
+      if (run !== v.run || v.closed) return;
+      say('Point the camera at the QR code on the station card.');
+      v.timer = setTimeout(scan, 150);
+    }
+
+    function scan() {
+      v.timer = 0;
+      if (v.closed || !v.stream) return;
+      const w0 = video.videoWidth;
+      const h0 = video.videoHeight;
+      if (video.readyState >= 2 && w0 && h0) {
+        // a smaller copy decodes faster and a QR card held up close still reads fine
+        const k = Math.min(1, 640 / Math.max(w0, h0));
+        const w = Math.max(1, Math.round(w0 * k));
+        const ht = Math.max(1, Math.round(h0 * k));
+        if (canvas.width !== w || canvas.height !== ht) [canvas.width, canvas.height] = [w, ht];
+        const g = canvas.getContext('2d', { willReadFrequently: true });
+        let hit = null;
+        try {
+          g.drawImage(video, 0, 0, w, ht);
+          hit = window.jsQR(g.getImageData(0, 0, w, ht).data, w, ht, { inversionAttempts: 'dontInvert' });
+        } catch { /* a frame that isn't ready */ }
+        if (hit?.data && found(hit.data)) return;
+      }
+      v.timer = setTimeout(scan, 150);
+    }
+
+    /** Handles a decoded QR. True when scanning is over (a station code). */
+    function found(text) {
+      const r = parseScan(text);
+      if (r.code) {
+        stop();
+        SFX.blip();
+        vibrate(40);
+        say(`Opening ${r.code}…`);
+        actions.replaceChildren();
+        openStation(r.code).then((ok) => {
+          if (ok || v.closed) return;
+          say('That code didn’t open a station. Scan another card, or type the code.', true);
+          actions.replaceChildren(againBtn('Scan again'), typeBtn());
+        });
+        return true;
+      }
+      // the same wrong code stays in view for a while: say so once, not 7 times a second
+      const t = Date.now();
+      if (text !== v.said || t - v.saidAt > 3000) {
+        v.said = text;
+        v.saidAt = t;
+        say(r.join ? 'That’s the join code. Scan a station card instead.' : 'That QR code isn’t a station card. Scan the one at the station.', true);
+        SFX.buzz();
+      }
+      return false;
+    }
+
+    v.root = h('div', { class: 'scan' },
+      video,
+      h('div', { class: 'scan-frame', 'aria-hidden': 'true' }),
+      h('div', { class: 'scan-top' },
+        h('b', {}, '📷 Scan a station QR'),
+        h('button', { type: 'button', class: 'scan-close', onclick: () => showView(back) }, '✕ Close')),
+      h('div', { class: 'scan-bottom' }, msg, actions));
+    showView(v);
+    start();
+  }
 
   // ---- photos
 
@@ -1836,12 +2762,19 @@
 
   // ------------------------------------------------------------------ overlays
 
-  /** "Were you in this photo with X?" for each request waiting on me (not while I'm mid-puzzle or mid-photo). */
+  /**
+   * "Were you in this photo with X?" or "Did X just ask you …?" for each request waiting on me (not while I'm mid-puzzle
+   * or mid-photo).
+   */
   function renderConfirm() {
     const el = $('#confirm');
     const s = store.state;
     const you = s?.you;
-    const open = s?.phase === 'play' && !s.paused && you?.status === 'alive' && ui.view?.kind !== 'puzzle' && ui.view?.kind !== 'photo';
+    // not over a phone game still being played (unless asked for there) or the camera; an activity's timer just keeps
+    // running underneath
+    const playing = ui.view?.kind === 'puzzle' && !ui.view.ended && !ui.view.losing;
+    const busy = (playing && !ui.confirmOver) || ui.view?.kind === 'photo';
+    const open = s?.phase === 'play' && !s.paused && you?.status === 'alive' && !busy;
     const c = open ? you.confirms.find((x) => !ui.snoozed.has(x.requestId) && !ui.answered.has(x.requestId)) : null;
     if (!c) {
       el.hidden = true;
@@ -1850,6 +2783,18 @@
       return;
     }
     el.hidden = false;
+    const answer = (yes) => (e) => answerPhoto(c, yes, e.currentTarget);
+    const later = h('button', { type: 'button', class: 'link-btn', onclick: () => snooze(c) }, 'Not now');
+    if (c.kind === 'talk') {
+      return void fill(el, c, () => h('div', { class: 'modal-box confirm-box' },
+        h('h1', {}, '💬 Quick check'),
+        h('p', { class: 'big' }, `Did ${c.from} just ask you:`),
+        h('p', { class: 'confirm-q' }, `“${c.prompt ?? '…'}”?`),
+        h('div', { class: 'row two' },
+          h('button', { type: 'button', class: 'yes-btn btn-big', onclick: answer(true) }, 'Yes'),
+          h('button', { type: 'button', class: 'no-btn btn-big', onclick: answer(false) }, 'No')),
+        later));
+    }
     fill(el, c, () => h('div', { class: 'modal-box confirm-box' },
       h('h1', {}, '📷 Photo check'),
       c.url ? h('img', { class: 'confirm-img', src: c.url, alt: c.title }) : '',
@@ -1858,7 +2803,13 @@
       h('div', { class: 'row two' },
         h('button', { type: 'button', class: 'yes-btn btn-big', onclick: (e) => answerPhoto(c, true, e.currentTarget) }, 'Yes'),
         h('button', { type: 'button', class: 'no-btn btn-big', onclick: (e) => answerPhoto(c, false, e.currentTarget) }, 'No')),
-      h('button', { type: 'button', class: 'link-btn', onclick: () => { ui.snoozed.add(c.requestId); render(); } }, 'Not now')));
+      later));
+  }
+
+  function snooze(c) {
+    ui.snoozed.add(c.requestId);
+    ui.confirmOver = false;
+    render();
   }
 
   async function answerPhoto(c, yes, btn) {
@@ -1867,7 +2818,9 @@
     btn.disabled = false;
     if (!res.ok) return toast(res.error, 'error');
     ui.answered.add(c.requestId);
-    toast(yes ? `Thanks! ${c.from}’s photo is in.` : 'Okay, they’ll take another one.');
+    if (!store.state?.you?.confirms.some((x) => !ui.answered.has(x.requestId) && !ui.snoozed.has(x.requestId))) ui.confirmOver = false;
+    if (c.kind === 'talk') toast(yes ? `Thanks! That counts for ${c.from}.` : 'Okay, it won’t count.');
+    else toast(yes ? `Thanks! ${c.from}’s photo is in.` : 'Okay, they’ll take another one.');
     render();
   }
 
@@ -2018,7 +2971,10 @@
       { key: 'lurkers', label: 'Lurkers (auto: 1 for up to 6 players, else 2)', type: 'select', options: [[0, 'Auto'], [1, '1'], [2, '2'], [3, '3']] },
     ]],
     ['Chores per player', [
-      num('taskCount', 'Tasks'), num('photoCount', 'Photos'), num('carryCount', 'Carries'),
+      { key: 'taskCount', label: 'Phone games (0–8)', type: 'num', max: 8 },
+      { key: 'actCount', label: 'Activities (0–8)', type: 'num', max: 8 },
+      { key: 'photoCount', label: 'Photos', type: 'num', max: 3 },
+      { key: 'carryCount', label: 'Carries', type: 'num', max: 3 },
       { key: 'barMode', label: 'Chore bar', type: 'select', options: [['live', 'Moves live'], ['meetings', 'Only moves at Campfires']] },
     ]],
     ['Kills (seconds)', [
@@ -2049,7 +3005,7 @@
     const row = (label, input) => h('label', { class: 'set-row' }, h('span', {}, label), input);
     const control = (d) => {
       let input;
-      if (d.type === 'num') input = h('input', { type: 'number', min: 0, step: 1, inputmode: 'numeric' });
+      if (d.type === 'num') input = h('input', { type: 'number', min: 0, max: d.max, step: 1, inputmode: 'numeric' });
       else if (d.type === 'check') input = h('input', { type: 'checkbox' });
       else input = h('select', {}, d.options.map(([value, label]) => h('option', { value: String(value) }, label)));
       f.inputs[d.key] = input;
@@ -2089,6 +3045,7 @@
           const raw = input.value.trim();
           const v = Number(raw);
           if (raw === '' || !Number.isInteger(v) || v < 0) throw new Error(`“${d.label}” needs a whole number.`);
+          if (d.max != null && v > d.max) throw new Error(`“${d.label}” goes up to ${d.max}.`);
           if (v !== cur[d.key]) patch[d.key] = v;
         } else if (d.type === 'check') {
           if (input.checked !== !!cur[d.key]) patch[d.key] = input.checked;

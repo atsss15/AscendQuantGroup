@@ -165,6 +165,8 @@ export function attachLake({ app, io }, { isAdminPassword, dir = path.resolve('d
   }
   const onExit = () => (saveTimer || live()) && save();
   process.on('exit', onExit);
+  // stations added to the catalog get their codes at load; save them now so printed cards keep working after a restart
+  scheduleSave();
 
   // ---- protocol
   const hostCommands = {
@@ -183,6 +185,7 @@ export function attachLake({ app, io }, { isAdminPassword, dir = path.resolve('d
   const actions = {
     choreStart: (id, a) => store.choreStart(id, a),
     choreDone: (id, a) => store.choreDone(id, a),
+    choreFail: (id, a) => store.choreFail(id, a),
     report: (id, a) => store.report(id, a),
     bell: (id, a) => store.bell(id, a),
     here: (id) => store.here(id),
@@ -192,6 +195,8 @@ export function attachLake({ app, io }, { isAdminPassword, dir = path.resolve('d
     storm: (id) => store.storm(id),
     stormFix: (id, a) => store.stormFix(id, a),
     confirmPhoto: (id, a) => store.confirmPhoto(id, a),
+    confirm: (id, a) => store.confirmPhoto(id, a),
+    talk: (id, a) => store.talk(id, a),
     sitOut: (id, a) => store.setSitOut(id, a.value),
   };
 
@@ -225,7 +230,7 @@ export function attachLake({ app, io }, { isAdminPassword, dir = path.resolve('d
       push(socket);
     });
 
-    handle(socket, 'station', ({ code } = {}) => ({ station: store.station(code) }));
+    handle(socket, 'station', ({ code } = {}) => ({ station: store.station(code, socket.data.playerId) }));
     handle(socket, 'gallery', () => {
       // who took which photo where and when is for the players, not anyone who opens the page
       if (!socket.data.playerId && !socket.data.isHost) throw new LakeError('Please sign in');
