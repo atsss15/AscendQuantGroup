@@ -82,7 +82,8 @@
 
   // ------------------------------------------------------------------ state
 
-  const store = { me: null, admin: null, editor: null, dirty: false, saving: null, open: new Set(), md:{ day: null, product: null, feature: null, data: new Map(), obs: new Map() } };
+  // md.data: `${day}:${ranAt}:${product}` → that product's price rows (the most recent few)
+  const store = { me: null, admin: null, editor: null, dirty: false, saving: null, open: new Set(), md:{ day: null, product: null, feature: null, rows: [], data: new Map(), obs: new Map() } };
   const FEATURES = '__features'; // the market-data tab showing the published features instead of a product
 
   // ------------------------------------------------------------------ sign in
@@ -213,19 +214,54 @@
   });
 
   function renderBacktest(r) {
-    const products = Object.entries(r.byProduct ?? {}).map(([s, v]) =>
-      h('tr', {}, h('td', {}, s), h('td', { class: `num ${cls(v.pnl)}` }, signed(v.pnl)), h('td', { class: 'num' }, v.position), h('td', { class: 'num' }, v.volume)));
+    const { rows: products, hidden } = productRows(r.byProduct ?? {});
     fill($('#bt-output'), 
       h('div', { class: 'toolbar' },
         h('span', { class: `pnl-big ${cls(r.pnl)}` }, signed(r.pnl)),
         h('span', { class: 'muted' }, `P&L on ${dayLabel(store.me.days.find((d) => d.day === r.day) ?? { day: r.day })} · ran in ${r.seconds.toFixed(1)}s`),
         r.speed ? h('span', { class: 'muted', title: 'CPU time per Trader.run call. At the same price, faster algorithms are earlier in the queue.' }, ` · Trader.run CPU ${duration(r.speed.avgMs)} avg, ${duration(r.speed.maxMs)} max`) : ''),
       table(['product', 'P&L', 'end position', 'volume'], products, '', [1, 2, 3]),
+      hidden ? h('p', { class: 'muted small' }, `${hidden} contract${hidden === 1 ? '' : 's'} you didn’t trade aren’t shown.`) : '',
       r.rejected ? h('p', { class: 'muted small' }, `${r.rejected} order batches were rejected for breaking position limits.`) : '',
       counterparties(r),
       r.errors?.length ? [h('h3', {}, 'Errors'), h('pre', { class: 'log err' }, r.errors.join('\n'))] : '',
       r.logs?.length ? [h('h3', {}, 'Your prints (last 200)'), h('pre', { class: 'log' }, r.logs.join('\n'))] : '',
     );
+  }
+
+  /**
+   * The backtest's P&L table rows. Products with an underlying are grouped under it: a total for the group, then the
+   * underlying itself and the contracts on it that you traded (by strike). Returns the rows and how many were left out.
+   */
+  function productRows(byProduct) {
+    const row = (label, v, style) => h('tr', {}, h('td', { style }, label), h('td', { class: `num ${cls(v.pnl)}` }, signed(v.pnl)),
+      h('td', { class: 'num' }, v.position ?? ''), h('td', { class: 'num' }, v.volume));
+    const meta = new Map((store.me?.products ?? []).map((p) => [p.symbol, p]));
+    const symbols = Object.keys(byProduct);
+    if (!symbols.some((s) => meta.get(s)?.underlying != null)) return { rows: symbols.map((s) => row(s, byProduct[s])), hidden: 0 };
+    const groups = new Map(); // group (an underlying, or a product on its own) → its symbols
+    for (const s of symbols) {
+      const g = meta.get(s)?.underlying ?? s;
+      if (!groups.has(g)) groups.set(g, []);
+      groups.get(g).push(s);
+    }
+    const rows = [];
+    let hidden = 0;
+    for (const [g, members] of groups) {
+      const contracts = members.filter((s) => s !== g).sort((a, b) => (meta.get(a)?.strike ?? 0) - (meta.get(b)?.strike ?? 0) || a.localeCompare(b));
+      if (!contracts.length) {
+        rows.push(row(g, byProduct[g]));
+        continue;
+      }
+      const sum = (k) => members.reduce((n, s) => n + (byProduct[s][k] ?? 0), 0);
+      rows.push(row(h('b', {}, `${g} (all)`), { pnl: Math.round(sum('pnl') * 100) / 100, volume: sum('volume') }));
+      if (byProduct[g]) rows.push(row(g, byProduct[g], 'padding-left:18px'));
+      for (const s of contracts) {
+        if (!byProduct[s].volume && !byProduct[s].position) hidden++;
+        else rows.push(row(s, byProduct[s], 'padding-left:18px'));
+      }
+    }
+    return { rows, hidden };
   }
 
   /** Who you traded with in a backtest: volume by counterparty, and all fills as a CSV. */
@@ -277,7 +313,7 @@
         h('td', { class: `num ${cls(d.mine?.pnl)}` }, d.entered ? signed(d.mine?.pnl) : 'no entry'),
         h('td', { class: `num ${cls(cum)}` }, d.counts ? signed(cum) : h('span', { class: 'muted small' }, 'not counted')),
         h('td', { class: 'muted small' }, d.mine?.errors?.length ? `${d.mine.errors.length} errors` : ''),
-        h('td', {}, d.entered ? [h('a', { href: fileUrl(`/days/${d.day}/own.csv`) }, 'trades'), ' ', h('a', { href: fileUrl(`/days/${d.day}/log.txt`) }, 'log')] : ''));
+        h('td', {}, d.entered && !d.archived ? [h('a', { href: fileUrl(`/days/${d.day}/own.csv`) }, 'trades'), ' ', h('a', { href: fileUrl(`/days/${d.day}/log.txt`) }, 'log')] : ''));
     });
     const latest = me.latestDay;
     const latestRows = (latest?.results ?? []).map((r, i) => h('tr', { class: r.name === me.name ? 'me' : '' },
@@ -466,22 +502,46 @@
 
   // ------------------------------------------------------------------ market data
 
-  async function loadDay(day) {
-    if (store.md.data.has(day)) return store.md.data.get(day);
-    const text = await fetch(fileUrl(`/days/${day}/prices.csv`)).then((r) => {
+  /** One product's price rows for a day (the server sends just that product's part of prices.csv). */
+  async function loadProduct(day, product) {
+    const info = store.me.days.find((d) => d.day === day);
+    const key = `${day}:${info?.ranAt}:${product}`;
+    if (store.md.data.has(key)) return store.md.data.get(key);
+    const text = await fetch(fileUrl(`/days/${day}/prices.csv?product=${encodeURIComponent(product)}`)).then((r) => {
       if (!r.ok) throw new Error('Could not load prices');
       return r.text();
     });
     const [head, ...lines] = text.trim().split('\n');
     const cols = head.split(';');
-    const byProduct = {};
-    for (const line of lines) {
+    const rows = lines.map((line) => {
       const v = line.split(';');
-      const row = Object.fromEntries(cols.map((c, i) => [c, v[i]]));
-      (byProduct[row.product] ??= []).push(row);
+      return Object.fromEntries(cols.map((c, i) => [c, v[i]]));
+    });
+    store.md.data.set(key, rows);
+    while (store.md.data.size > 24) store.md.data.delete(store.md.data.keys().next().value);
+    return rows;
+  }
+
+  /**
+   * The market data tabs: products on their own, and for products that are contracts on an underlying, the
+   * underlying's tab (its contracts show in the row below when it or one of them is picked).
+   */
+  function productTabs() {
+    const products = store.me.products ?? [];
+    const tops = [];
+    const contracts = new Map(); // underlying → its contracts, by strike
+    for (const p of products) {
+      const top = p.underlying ?? p.symbol;
+      if (!tops.includes(top)) tops.push(top);
+      if (p.underlying != null) {
+        if (!contracts.has(top)) contracts.set(top, []);
+        contracts.get(top).push(p);
+      }
     }
-    store.md.data.set(day, byProduct);
-    return byProduct;
+    for (const list of contracts.values()) list.sort((a, b) => (a.strike ?? 0) - (b.strike ?? 0) || a.symbol.localeCompare(b.symbol));
+    const listed = new Set(products.map((p) => p.symbol));
+    const groupOf = (symbol) => products.find((p) => p.symbol === symbol)?.underlying ?? symbol;
+    return { tops, contracts, listed, groupOf };
   }
 
   /** The day's published features (rows of {timestamp, feature: value}), or null if the day has none. */
@@ -506,43 +566,59 @@
       return;
     }
     const info = store.me.days.find((d) => d.day === day);
-    let data;
+    const { tops, contracts, listed, groupOf } = productTabs();
     let obs;
     try {
-      [data, obs] = await Promise.all([loadDay(day), loadObservations(day)]);
+      obs = await loadObservations(day);
     } catch (err) {
       return toast(err.message, 'error');
     }
-    fill(dl, 
+    const choices = [...listed, ...(obs ? [FEATURES] : [])];
+    if (!choices.includes(store.md.product)) store.md.product = choices[0];
+    const product = store.md.product;
+    let rows = [];
+    if (product !== FEATURES && product != null) {
+      try {
+        rows = await loadProduct(day, product);
+      } catch (err) {
+        return toast(err.message, 'error');
+      }
+      if (store.md.day !== day || store.md.product !== product) return; // the choice changed while it loaded
+    }
+    store.md.rows = rows;
+    fill(dl,
       h('a', { href: fileUrl(`/days/${day}/prices.csv`) }, 'prices.csv'),
       h('a', { href: fileUrl(`/days/${day}/trades.csv`) }, 'trades.csv'),
       obs ? h('a', { href: fileUrl(`/days/${day}/observations.csv`) }, 'observations.csv') : '',
       info?.entered ? h('a', { href: fileUrl(`/days/${day}/own.csv`) }, 'my trades.csv') : '',
       h('a', { href: fileUrl('/data.zip'), title: 'prices, trades and features for every released day' }, 'all days (zip)'),
     );
-    const tabs = [...Object.keys(data), ...(obs ? [FEATURES] : [])];
-    if (!tabs.includes(store.md.product)) store.md.product = tabs[0];
-    fill($('#md-products'), ...tabs.map((p) => h('button', {
+    const pick = (p) => () => { store.md.product = p; renderMarket(); };
+    const group = product === FEATURES ? null : groupOf(product);
+    fill($('#md-products'), ...[...tops, ...(obs ? [FEATURES] : [])].map((p) => h('button', {
       type: 'button',
-      class: p === store.md.product ? 'active' : '',
-      onclick: () => { store.md.product = p; renderMarket(); },
+      class: p === group || p === product ? 'active' : '',
+      // an underlying that isn't traded itself opens its first contract
+      onclick: pick(listed.has(p) || p === FEATURES ? p : contracts.get(p)[0].symbol),
     }, p === FEATURES ? 'Weather & features' : p)));
     const features = obs ? Object.keys(obs[0] ?? {}).filter((c) => c !== 'day' && c !== 'timestamp') : [];
     const numeric = features.filter((c) => obs.some((r) => r[c] !== '' && Number.isFinite(Number(r[c]))));
     if (!numeric.includes(store.md.feature)) store.md.feature = numeric[0];
-    fill($('#md-features'), store.md.product === FEATURES ? numeric.map((f) => h('button', {
-      type: 'button',
-      class: f === store.md.feature ? 'active' : '',
-      onclick: () => { store.md.feature = f; renderMarket(); },
-    }, f)) : '');
-    const rows = currentRows();
+    fill($('#md-features'), product === FEATURES
+      ? numeric.map((f) => h('button', {
+          type: 'button',
+          class: f === store.md.feature ? 'active' : '',
+          onclick: () => { store.md.feature = f; renderMarket(); },
+        }, f))
+      : (contracts.get(group) ?? []).map((p) => h('button', { type: 'button', class: p.symbol === product ? 'active' : '', onclick: pick(p.symbol) }, p.symbol)));
+    const current = currentRows();
     const slider = $('#md-slider');
-    slider.max = Math.max(rows.length - 1, 0);
-    if (Number(slider.value) > rows.length - 1) slider.value = 0;
-    showTick(rows, Number(slider.value));
+    slider.max = Math.max(current.length - 1, 0);
+    if (Number(slider.value) > current.length - 1) slider.value = 0;
+    showTick(current, Number(slider.value));
   }
 
-  const currentRows = () => (store.md.product === FEATURES ? store.md.obs.get(store.md.day) ?? [] : store.md.data.get(store.md.day)?.[store.md.product] ?? []);
+  const currentRows = () => (store.md.product === FEATURES ? store.md.obs.get(store.md.day) ?? [] : store.md.rows);
 
   function showTick(rows, i) {
     if (store.md.product === FEATURES) {
@@ -688,19 +764,7 @@
         toast(err.message, 'error');
       }
     };
-    const newRound = async () => {
-      const answer = prompt('Start a new round?\n\nThis retires everything from the current round: days, results, the leaderboard and everyone’s submissions move to an archive on the server. Then new data days are generated with the current design, numbered up to Day 0, and the first real day is Day 1. Players keep the code in their editors. Set the schedule’s start date to give players time to research.\n\nHow many data days (bots only, 10,000 ticks each)?', '15');
-      if (answer == null) return;
-      const dataDays = Number(answer);
-      if (!Number.isInteger(dataDays) || dataDays < 1 || dataDays > 30) return toast('Pick 1 to 30 data days', 'error');
-      try {
-        await api('POST', '/admin/new-round', { dataDays, firstDay: 1 });
-        toast('New round started: generating data days');
-        pollAdmin();
-      } catch (err) {
-        toast(err.message, 'error');
-      }
-    };
+    const newRound = () => newRoundDialog(a);
 
     const wo = a.without;
     // saved on every change, so a refresh can't undo a tick that wasn't saved yet
@@ -784,6 +848,71 @@
       folded('admin-days', `Days (${a.days.length})`, days.length ? days : h('p', { class: 'muted small' }, 'No days yet. Generate data days so players have data to start with.')),
     );
     renderHosting();
+  }
+
+  /**
+   * Start a new round: how many data days, the first real day, and whether the market continues from this round's
+   * close. The data days are numbered up to the day before the first real day.
+   */
+  function newRoundDialog(a) {
+    const lastDay = a.days.length ? Math.max(...a.days.map((d) => d.day)) : null;
+    // a round with no real day yet is redone, so continuing starts again from where it began
+    const redo = !a.started && a.continuedFrom;
+    const from = redo ? a.continuedFrom : lastDay != null ? { round: a.round, day: lastDay } : null;
+    const count = h('input', { type: 'number', min: 1, max: 30, step: 1, value: 15 });
+    const keep = h('input', { type: 'checkbox', checked: !!from, disabled: !from, style: 'width:auto' });
+    const keepBoard = h('input', { type: 'checkbox', style: 'width:auto' });
+    const first = h('input', { type: 'number', step: 1 });
+    const summary = h('p', { class: 'muted small' });
+    let firstEdited = false;
+    const suggest = () => (keep.checked && from ? from.day + 1 + Number(count.value) : 1);
+    const update = () => {
+      if (!firstEdited) first.value = suggest();
+      const n = Number(count.value);
+      const f = Number(first.value);
+      summary.textContent = Number.isInteger(n) && n >= 1 && n <= 30 && Number.isInteger(f)
+        ? `Data days ${f - n} to ${f - 1} (bots only, ${(a.ticks ?? 0).toLocaleString()} ticks each), ${keep.checked ? `opening where ${from.round === a.round ? 'this round' : `round ${from.round}`}’s Day ${from.day} closed` : 'starting a fresh market'}. The first real day is Day ${f}. Automatic runs skip today.`
+        : 'Pick 1 to 30 data days and a whole-number first day.';
+    };
+    count.addEventListener('input', update);
+    keep.addEventListener('change', update);
+    first.addEventListener('input', () => {
+      firstEdited = true;
+      update();
+    });
+    const close = () => dialog.remove();
+    const dialog = h('div', { id: 'new-round', class: 'modal', onclick: (e) => e.target === dialog && close() },
+      h('form', {
+        class: 'modal-box',
+        onsubmit: async (e) => {
+          e.preventDefault();
+          const dataDays = Number(count.value);
+          const firstDay = Number(first.value);
+          if (!Number.isInteger(dataDays) || dataDays < 1 || dataDays > 30) return toast('Pick 1 to 30 data days', 'error');
+          if (!Number.isInteger(firstDay)) return toast('The first real day must be a whole number', 'error');
+          try {
+            const r = await api('POST', '/admin/new-round', { dataDays, firstDay, continueMarket: keep.checked, keepLeaderboard: keepBoard.checked });
+            close();
+            toast(`New round started: generating data days ${r.dataDays[0]} to ${r.dataDays[1]}`);
+            pollAdmin();
+          } catch (err) {
+            toast(err.message, 'error');
+          }
+        },
+      },
+      h('h1', {}, 'Start a new round?'),
+      h('p', { class: 'small' }, 'This retires everything from the current round: days, results, the leaderboard and everyone’s submissions move to an archive on the server. Then new data days are generated with the current design. Players keep the code in their editors. Set the schedule’s start date to give players time to research.'),
+      h('label', { class: 'small' }, 'Data days (bots only)', count),
+      h('label', { class: 'toolbar small' }, keep, from ? `Continue prices from where ${from.round === a.round ? 'this round' : `round ${from.round}`}’s Day ${from.day} closed` : 'Continue prices (no day to continue from)'),
+      h('label', { class: 'toolbar small' }, keepBoard, 'Keep the leaderboard: the days that counted so far stay on it, and the new round’s days add to everyone’s total'),
+      h('label', { class: 'small' }, 'First real day', first),
+      summary,
+      h('div', { class: 'toolbar' }, h('span', { class: 'grow' }),
+        h('button', { type: 'button', onclick: close }, 'Cancel'),
+        h('button', { type: 'submit', class: 'danger' }, 'Start new round'))));
+    update();
+    document.body.append(dialog);
+    count.focus();
   }
 
   /** Fly.io hosting cost (estimate from machine size and list prices; billing status if the server has a read-only token). */
@@ -879,7 +1008,7 @@
       renderHowto(me);
     }
     // day pickers
-    const released = [...me.days].reverse();
+    const released = me.days.filter((d) => !d.archived).reverse(); // days kept from earlier rounds have no files here
     for (const sel of [$('#bt-day'), $('#md-day')]) {
       const prev = sel.value;
       fill(sel, ...released.map((d) => h('option', { value: d.day }, dayLabel(d))));
@@ -894,12 +1023,25 @@
     renderAdmin();
   }
 
+  /** "A ±80, B ±100, 14 contracts on A ±50 each": contracts on the same underlying with the same limit go together. */
+  function limitsText(products) {
+    const parts = [];
+    const groups = new Map(); // `${underlying} ±${limit}` → how many
+    for (const p of products) {
+      if (p.underlying == null) parts.push(`${p.symbol} ±${p.limit}`);
+      else groups.set(`${p.underlying} ±${p.limit}`, (groups.get(`${p.underlying} ±${p.limit}`) ?? 0) + 1);
+    }
+    for (const [what, n] of groups) parts.push(`${n} contract${n === 1 ? '' : 's'} on ${what}${n === 1 ? '' : ' each'}`);
+    return parts.join(', ');
+  }
+
   function renderHowto(me) {
-    const limits = me.products.map((p) => `${p.symbol} ±${p.limit}`).join(', ');
-    fill($('#howto'), 
+    fill($('#howto'),
       h('p', {}, 'Write a ', h('code', {}, 'Trader'), ' class with a ', h('code', {}, 'run(self, state)'), ' method, the same interface as IMC Prosperity. It is called every tick with a ', h('code', {}, 'TradingState'),
         ' (order depths, your position, your fills and the market\'s trades since last tick) and returns ', h('code', {}, '(orders_by_product, conversions, traderData)'), '.'),
-      h('p', {}, `A day has ${me.ticks} ticks. Position limits: ${limits}. If your orders for a product could take you past its limit, all of them are rejected for that tick. Each call must finish within ${me.timeLimitMs}ms.`),
+      h('p', {}, `A day has ${me.ticks.toLocaleString()} ticks. Position limits: ${limitsText(me.products)}. If your orders for a product could take you past its limit, all of them are rejected for that tick. Each call must finish within ${me.timeLimitMs}ms.`),
+      // this round's own notes (the design's HTML: products, contract terms and the like)
+      me.notes ? h('div', { class: 'howto-notes', innerHTML: me.notes }) : '',
       h('p', {}, 'Matching: every algorithm acts on the same snapshot at the same time. Your orders first trade against the bots\' quotes (best price first), orders that cross other players clear in a batch auction, and what\'s left can be hit by taker bots. All orders are cancelled at the end of the tick.'),
       h('p', {}, 'Queue at the same price: the bots\' quotes come first (they were posted at the start of the tick), then algorithms in order of the CPU time their ', h('code', {}, 'Trader.run'), ' used that tick, fastest first. Backtests show your CPU time per call. To get ahead of slower players, be faster or improve the price.'),
       h('p', {}, me.schedule?.enabled

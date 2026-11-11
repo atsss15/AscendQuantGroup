@@ -58,6 +58,12 @@ table.list tr.me td { background: rgba(88, 166, 255, 0.08); }
 .progress-bar > div { height: 100%; background: var(--amber); transition: width 0.3s; }
 .howto { color: var(--muted); font-size: 13px; display: grid; gap: 8px; }
 .howto code { background: var(--panel-2); padding: 1px 4px; border-radius: 4px; color: var(--text); }
+.howto-notes { display: grid; gap: 8px; }
+.howto-notes > * { margin: 0; }
+.howto-notes h3, .howto-notes h4 { margin: 4px 0 0; font-size: 13px; color: var(--text); }
+.howto-notes ul, .howto-notes ol { padding-left: 18px; }
+.howto-notes table { border-collapse: collapse; font-size: 12px; }
+.howto-notes th, .howto-notes td { padding: 2px 8px; border-top: 1px solid var(--border); text-align: left; }
 .modal select, .modal input { width: 100%; padding: 10px; font-size: 16px; }
 
 /* folded sections on the results tab (they stay open or shut across refreshes) */

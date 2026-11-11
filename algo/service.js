@@ -3,9 +3,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomInt, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { simulateDay, toCsv, PRICE_COLUMNS } from './sim.js';
+import { simulateDay, toCsv, PRICE_COLUMNS, LISTING_TERMS } from './sim.js';
 import { startAgent } from './runner.js';
-import { zip } from './zip.js';
+import { writeZip } from './zip.js';
 
 const DATAMODEL = fileURLToPath(new URL('./py/datamodel.py', import.meta.url));
 
@@ -37,7 +37,8 @@ export class AlgoService {
     this.slots = Number(process.env.BACKTEST_SLOTS) || Math.max(2, os.availableParallelism());
     this.backtests = 0;
     this.waiting = [];
-    this.curves = new Map(); // day → each player's P&L through the day (see dayCurves)
+    this.curves = new Map(); // day → each player's P&L through the day, as it's built (see dayCurves)
+    this.priceSplits = new Map(); // a few recent days' prices split by product, as they're built (see productPrices)
     this.extra = null; // { day, out, progress, agents } while a day re-runs without the chosen players (see runWithout)
     this.filling = null; // the background loop working through the missing re-runs
     this.withoutFailed = new Set(); // re-runs that failed (`${day}:${ranAt}:${who}`); retried when the admin saves again
@@ -126,7 +127,7 @@ export class AlgoService {
    * Simulate the next day. Practice days run the bots only (data for players to study);
    * competition days run every player's latest submission against the bots and each other.
    */
-  async runDay({ practice = false, day: requested } = {}) {
+  async runDay({ practice = false, day: requested, seed: chosen } = {}) {
     if (this.running) throw new AlgoError(`Day ${this.running.day} is already running`);
     // data days lead up to the first competition day; an extra one continues the series from the latest day
     // (so only before the first competition day), and the first competition day moves after it
@@ -134,9 +135,11 @@ export class AlgoService {
       throw new AlgoError('Data days can only be added before the first real day runs');
     }
     const day = practice ? requested ?? (this.state.days.length ? Math.max(...this.state.days.map((d) => d.day)) + 1 : this.state.nextDay - 1) : this.state.nextDay;
-    // continue from where the previous day ended (a round's first day starts fresh)
-    const carry = this.worldState(day - 1)?.out ?? null;
-    const seed = randomInt(1, 2 ** 31);
+    // continue from where the previous day ended; a round's first day starts fresh, or where the round was told to
+    // continue from (see newRound)
+    const first = !this.state.days.some((d) => d.day < day);
+    const carry = this.worldState(day - 1)?.out ?? (first ? this.state.start?.carry : null) ?? null;
+    const seed = chosen ?? randomInt(1, 2 ** 31); // a new round's data days can come with their seeds (see newRound)
     const entries = practice ? [] : Object.entries(this.state.submissions).map(([userId, s]) => ({ userId, ...s }));
     this.running = { day, practice, progress: 0, startedAt: Date.now(), players: entries.length };
     for (const a of this.extra?.agents ?? []) a.close(); // a re-run in progress gives way at once (it resumes after)
@@ -377,14 +380,47 @@ export class AlgoService {
   // ---------------------------------------------------------------- rounds
 
   /**
+   * Check a new round's settings (throws AlgoError), and find the market its first data day opens with, before
+   * anything is archived. Data days are firstDay - dataDays … firstDay - 1.
+   * continueMarket: open where the current round's last day closed (that day's world.json `out`). A round that never
+   * had a real day is being redone, so if it continued a market itself, the redo continues from the same place.
+   * seeds: optional, one whole number (1 … 2^31 − 1) per data day, oldest first, used instead of random seeds, so
+   * the same data days can be made again (same design and starting market, same days).
+   * keepLeaderboard: the days that counted so far stay on the leaderboard, and the new round's days add to them.
+   * @returns {{ dataDays: number, firstDay: number, seeds: number[] | null, keepLeaderboard: boolean, start: { round: number, day: number, carry: object } | null }}
+   */
+  planRound({ dataDays = 3, firstDay = 1, continueMarket = false, seeds = null, keepLeaderboard = false } = {}) {
+    if (!Number.isInteger(dataDays) || dataDays < 1 || dataDays > 30) throw new AlgoError('Pick 1 to 30 data days');
+    if (!Number.isInteger(firstDay) || Math.abs(firstDay) > 100000) throw new AlgoError('The first real day must be a whole number');
+    if (typeof continueMarket !== 'boolean') throw new AlgoError('continueMarket must be true or false');
+    if (typeof keepLeaderboard !== 'boolean') throw new AlgoError('keepLeaderboard must be true or false');
+    if (seeds != null && (!Array.isArray(seeds) || seeds.length !== dataDays || !seeds.every((s) => Number.isInteger(s) && s >= 1 && s < 2 ** 31))) {
+      throw new AlgoError(`seeds must be ${dataDays} whole numbers from 1 to ${2 ** 31 - 1}, one per data day, oldest first`);
+    }
+    const plan = { dataDays, firstDay, seeds: seeds && [...seeds], keepLeaderboard };
+    if (!continueMarket) return { ...plan, start: null };
+    const redo = !this.state.days.some((d) => !d.practice);
+    if (redo && this.state.start?.carry) return { ...plan, start: this.state.start };
+    const last = this.state.days.at(-1);
+    const carry = last && this.worldState(last.day)?.out;
+    if (!carry) throw new AlgoError('This round has no closing market to continue from');
+    return { ...plan, start: { round: this.state.round ?? 0, day: last.day, carry } };
+  }
+
+  /**
    * Retire everything from the current round and start fresh: the state and day files move to
    * archive/<time>/, then `dataDays` bots-only days (firstDay - dataDays … firstDay - 1, e.g. -14 … 0) are generated with the
-   * current design for players to study, and the first competition day is `firstDay`.
-   * Players keep the code in their editor; submissions, days, results and the leaderboard start over.
+   * current design for players to study, and the first competition day is `firstDay`. With `continueMarket` the first
+   * data day opens where the current round's market closed (see planRound); otherwise the market starts fresh. With
+   * `seeds`, data day i runs on seeds[i] instead of a random seed.
+   * Players keep the code in their editor; submissions, days and results start over. So does the leaderboard, unless
+   * `keepLeaderboard`: then the days that counted so far stay on it (P&L only, their files read from the archive).
    * A round that never had a competition day is redone under the same number.
+   * The schedule is kept, but it won't run a day on the date the round starts (the admin can still run one).
    */
-  async newRound({ dataDays = 3, firstDay = 1 } = {}) {
+  async newRound(opts = {}) {
     if (this.running || this.preparing) throw new AlgoError('A simulation is running; try again when it finishes');
+    const { dataDays, firstDay, seeds, keepLeaderboard, start } = this.planRound(opts); // reads the closing market before it's archived
     this.preparing = { startedAt: Date.now(), dataDays, done: 0 };
     try {
       const stamp = path.join(this.dir, 'archive', new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-'));
@@ -395,17 +431,44 @@ export class AlgoService {
       fs.copyFileSync(path.join(this.dir, 'state.json'), path.join(archive, 'state.json'));
       if (fs.existsSync(path.join(this.dir, 'days'))) fs.renameSync(path.join(this.dir, 'days'), path.join(archive, 'days'));
       const { drafts, schedule, withoutPlayers = [], round = 0 } = this.state;
+      const earlierDays = keepLeaderboard
+        ? [
+            ...(this.state.earlierDays ?? []),
+            ...this.state.days.filter((d) => !d.practice && d.counts !== false).map((d) => ({
+              round,
+              day: d.day,
+              ranAt: d.ranAt,
+              dir: path.relative(this.dir, path.join(archive, 'days', String(d.day))),
+              results: pnlOnly(d.results),
+              ...(d.baseline && { baseline: { results: pnlOnly(d.baseline.results) } }),
+              ...(d.without && { without: { players: d.without.players, results: pnlOnly(d.without.results) } }),
+            })),
+          ]
+        : [];
       this.withoutFailed.clear();
       this.withoutError = null;
+      this.priceSplits.clear();
       const started = this.state.days.some((d) => !d.practice);
-      this.state = { ...freshState(), drafts, schedule: { ...schedule, lastRun: null }, withoutPlayers, round: started || round === 0 ? round + 1 : round, practiceMode: false, nextDay: firstDay };
+      // the scheduler counts today as done, so the round's first real day can't start the moment its data is ready
+      const today = zoned(Date.now(), schedule.timeZone ?? freshState().schedule.timeZone).date;
+      this.state = {
+        ...freshState(),
+        drafts,
+        schedule: { ...schedule, lastRun: today },
+        withoutPlayers,
+        earlierDays,
+        round: started || round === 0 ? round + 1 : round,
+        practiceMode: false,
+        nextDay: firstDay,
+        start, // where the market opens (null: fresh), kept for a redo of this round
+      };
       this.save();
-      // oldest first, so each data day continues the one before and Day 0 continues the last of them
+      // oldest first, so each data day continues the one before and the first real day continues the last of them
       for (let i = 0; i < dataDays; i++) {
-        await this.runDay({ practice: true, day: firstDay - dataDays + i });
+        await this.runDay({ practice: true, day: firstDay - dataDays + i, seed: seeds?.[i] });
         this.preparing.done = i + 1;
       }
-      return { round: this.state.round, archived: archive, dataDays: this.state.days.map((d) => d.day) };
+      return { round: this.state.round, archived: archive, dataDays: this.state.days.map((d) => d.day), continuedFrom: start && { round: start.round, day: start.day }, keptDays: earlierDays.map((d) => d.day) };
     } finally {
       this.preparing = null;
     }
@@ -425,14 +488,14 @@ export class AlgoService {
       for (const d of days) {
         for (const kind of ['prices', 'trades', 'observations']) {
           const full = path.join(this.dayDir(d.day), `${kind}.csv`);
-          if (fs.existsSync(full)) files.push({ name: `round_${round}/${kind}_round_${round}_day_${d.day}.csv`, data: fs.readFileSync(full) });
+          if (fs.existsSync(full)) files.push({ name: `round_${round}/${kind}_round_${round}_day_${d.day}.csv`, path: full });
         }
       }
-      files.push({ name: `round_${round}/datamodel.py`, data: fs.readFileSync(DATAMODEL) });
-      const buf = await zip(files);
+      files.push({ name: `round_${round}/datamodel.py`, path: DATAMODEL });
       fs.rmSync(exportDir, { recursive: true, force: true }); // older zips
       fs.mkdirSync(exportDir, { recursive: true });
-      fs.writeFileSync(`${file}.tmp`, buf);
+      // one file at a time, straight to disk: a round's data can be hundreds of MB
+      await writeZip(`${file}.tmp`, files);
       fs.renameSync(`${file}.tmp`, file);
       return file;
     })().finally(() => (this.zipping = null));
@@ -533,9 +596,14 @@ export class AlgoService {
 
   // ---------------------------------------------------------------- views
 
-  /** Cumulative P&L over the days that count (not data days, not practice-week days). */
+  /** The days that count (not data days, not practice-week days), after those kept from earlier rounds. */
+  countedDays() {
+    return [...(this.state.earlierDays ?? []), ...this.state.days.filter((d) => !d.practice && d.counts !== false)];
+  }
+
+  /** Cumulative P&L over the days that count. */
   leaderboard(names) {
-    const comp = this.state.days.filter((d) => !d.practice && d.counts !== false);
+    const comp = this.countedDays();
     const ids = new Set(comp.flatMap((d) => Object.keys(d.results)));
     return [...ids]
       .map((id) => {
@@ -549,48 +617,58 @@ export class AlgoService {
    * The leaderboard's lines: each player's cumulative P&L through the days that count, sampled every few ticks
    * (at most LINE_POINTS per player in all). A player who sat a day out stays flat through it.
    */
-  leaderboardLines(names) {
-    const comp = this.state.days.filter((d) => !d.practice && d.counts !== false);
+  async leaderboardLines(names) {
+    const comp = this.countedDays();
     const ids = [...new Set(comp.flatMap((d) => Object.keys(d.results)))];
     const total = Object.fromEntries(ids.map((id) => [id, 0]));
     const pts = Object.fromEntries(ids.map((id) => [id, []]));
-    const days = comp.map((d) => {
-      const curves = this.dayCurves(d);
+    const days = [];
+    for (const d of comp) {
+      const curves = await this.dayCurves(d);
       const n = Math.min(Object.values(curves)[0]?.length ?? CURVE_POINTS, Math.max(20, Math.floor(LINE_POINTS / comp.length)));
       for (const id of ids) {
         const c = curves[id];
         for (let j = 0; j < n; j++) pts[id].push(round2(total[id] + (c ? c[Math.round(((j + 1) * c.length) / n) - 1] : 0)));
         total[id] += d.results[id]?.pnl ?? 0;
       }
-      return { day: d.day, points: n };
-    });
+      days.push({ day: d.day, points: n });
+    }
     return { days, players: ids.map((id) => ({ userId: id, name: names(id), pts: pts[id] })) };
   }
 
   /**
    * Each player's P&L through one competition day, CURVE_POINTS samples: their fills marked to the mid price
-   * (public, unlike fair value), with the last sample the day's official P&L. Built from the day's files.
+   * (public, unlike fair value), with the last sample the day's official P&L. Built once from the day's files.
    */
   dayCurves(d) {
-    const key = `${d.day}:${d.ranAt}`;
-    if (this.curves.has(key)) return this.curves.get(key);
-    const dir = this.dayDir(d.day);
+    const key = `${d.dir ?? ''}:${d.day}:${d.ranAt}`;
+    if (!this.curves.has(key)) {
+      this.curves.set(key, this.buildCurves(d).catch((err) => {
+        this.curves.delete(key);
+        throw err;
+      }));
+    }
+    return this.curves.get(key);
+  }
+
+  async buildCurves(d) {
+    const dir = d.dir ? path.join(this.dir, d.dir) : this.dayDir(d.day); // a day kept from an earlier round: in the archive
     if (!fs.existsSync(path.join(dir, 'prices.csv'))) return {};
-    const [head, ...rows] = fs.readFileSync(path.join(dir, 'prices.csv'), 'utf8').trim().split('\n');
-    const col = Object.fromEntries(head.split(';').map((c, i) => [c, i]));
-    // the mid price of every product at each sample's end (the last known mid if the book was one-sided)
+    // each product's last two-sided mid at each sample's end; a product with none yet isn't in `mid`
     const ticks = this.config.ticks;
     const step = this.config.tickStep ?? 100;
     const every = Math.max(1, Math.round(ticks / CURVE_POINTS));
     const ends = Array.from({ length: Math.ceil(ticks / every) }, (_, j) => Math.min((j + 1) * every, ticks) * step - step);
     const mid = {};
     const marks = [];
-    for (const line of rows) {
+    let col = null;
+    await eachLine(path.join(dir, 'prices.csv'), (line) => {
       const v = line.split(';');
+      if (!col) return void (col = Object.fromEntries(v.map((c, i) => [c, i])));
       const t = Number(v[col.timestamp]);
       while (marks.length < ends.length && t > ends[marks.length]) marks.push({ ...mid });
       if (v[col.mid_price] !== '') mid[v[col.product]] = Number(v[col.mid_price]);
-    }
+    });
     while (marks.length < ends.length) marks.push({ ...mid });
 
     const curves = {};
@@ -608,14 +686,45 @@ export class AlgoService {
           pos[symbol] = (pos[symbol] ?? 0) + q;
           cash[symbol] = (cash[symbol] ?? 0) - q * Number(price);
         }
+        // a product that hasn't had a two-sided book yet has no price to mark at: it stays out until it does
         let v = 0;
-        for (const s of Object.keys(pos)) v += cash[s] + pos[s] * (marks[j][s] ?? 0);
+        for (const s of Object.keys(pos)) if (marks[j][s] !== undefined) v += cash[s] + pos[s] * marks[j][s];
         return Math.round(v);
       });
       curves[id][ends.length - 1] = d.results[id]?.pnl ?? 0;
     }
-    this.curves.set(key, curves);
     return curves;
+  }
+
+  /**
+   * One product's rows of a day's prices.csv (with the header), for the market data tab: a day with many products is
+   * tens of MB. The last few days asked for are kept split by product, so each is read once.
+   */
+  async productPrices(day, product) {
+    const d = this.getDay(day);
+    const key = `${d.day}:${d.ranAt}`;
+    if (!this.priceSplits.has(key)) {
+      const file = this.dataFile(d.day, 'prices');
+      const split = (async () => {
+        let head = null;
+        const rows = new Map(); // product → its lines
+        await eachLine(file, (line) => {
+          if (head === null) return void (head = line);
+          // day;timestamp;product;…
+          const a = line.indexOf(';');
+          const b = line.indexOf(';', a + 1);
+          const sym = line.slice(b + 1, line.indexOf(';', b + 1));
+          if (!rows.has(sym)) rows.set(sym, []);
+          rows.get(sym).push(line);
+        });
+        return { head, csv: new Map([...rows].map(([sym, lines]) => [sym, lines.join('\n') + '\n'])) };
+      })();
+      this.priceSplits.set(key, split);
+      split.catch(() => this.priceSplits.delete(key));
+      while (this.priceSplits.size > PRICE_SPLITS) this.priceSplits.delete(this.priceSplits.keys().next().value);
+    }
+    const { head, csv } = await this.priceSplits.get(key);
+    return `${head ?? PRICE_COLUMNS.join(';')}\n${csv.get(String(product)) ?? ''}`;
   }
 
   /**
@@ -625,7 +734,7 @@ export class AlgoService {
    */
   withoutBoards(names) {
     const out = this.state.withoutPlayers ?? [];
-    const days = this.state.days.filter((d) => !d.practice && d.counts !== false && out.length && d.without?.players?.join() === out.join());
+    const days = this.countedDays().filter((d) => out.length && d.without?.players?.join() === out.join());
     if (!days.length) return [];
     const ids = [...new Set(days.flatMap((d) => Object.keys(d.results)))].filter((id) => !out.includes(id));
     const sum = (f) => round2(days.reduce((s, d) => s + (f(d) ?? 0), 0));
@@ -635,9 +744,9 @@ export class AlgoService {
     return [{ players: out.map((id) => ({ userId: id, name: names(id) })), days: days.map((d) => d.day), board }];
   }
 
-  /** Standings for the most recent competition day, counted or not. */
+  /** Standings for the most recent competition day, counted or not (until this round has one: the last day kept). */
   latestDay(names) {
-    const d = [...this.state.days].reverse().find((x) => !x.practice);
+    const d = [...this.state.days].reverse().find((x) => !x.practice) ?? this.state.earlierDays?.at(-1);
     if (!d) return null;
     return {
       day: d.day,
@@ -654,7 +763,9 @@ export class AlgoService {
       ticks: c.ticks,
       tickStep: c.tickStep,
       timeLimitMs: c.timeLimitMs,
-      products: c.products,
+      // only the public terms of each product (a design may keep its own fields on them)
+      products: c.products.map((p) => Object.fromEntries(PUBLIC_PRODUCT_FIELDS.filter((k) => p[k] != null).map((k) => [k, p[k]]))),
+      notes: typeof c.notes === 'string' ? c.notes : null, // the design's notes for players (HTML), shown in How it works
       nextDay: this.state.nextDay,
       deadline: this.state.deadline,
       practiceMode: this.state.practiceMode !== false,
@@ -672,14 +783,23 @@ export class AlgoService {
       draft: this.draft(userId),
       template: this.config.template,
       submission: sub ? { submittedAt: sub.submittedAt, forDay: sub.forDay } : null,
-      days: this.state.days.map((d) => ({
+      // days kept from earlier rounds first (P&L only: their files are archived)
+      days: [...(this.state.earlierDays ?? []).map((d) => ({
+        day: d.day,
+        practice: false,
+        counts: true,
+        ranAt: d.ranAt,
+        mine: d.results[userId] ?? null,
+        entered: !!d.results[userId],
+        archived: true,
+      })), ...this.state.days.map((d) => ({
         day: d.day,
         practice: d.practice,
         counts: d.counts !== false,
         ranAt: d.ranAt,
         mine: d.results[userId] ?? null,
         entered: !!d.entries?.[userId],
-      })),
+      }))],
       leaderboard: this.leaderboard(names),
       without: this.withoutBoards(names),
       latestDay: this.latestDay(names),
@@ -689,6 +809,8 @@ export class AlgoService {
   adminView(names) {
     return {
       ...this.publicInfo(),
+      continuedFrom: this.state.start ? { round: this.state.start.round, day: this.state.start.day } : null,
+      started: this.state.days.some((d) => !d.practice),
       submissions: Object.entries(this.state.submissions)
         .map(([id, s]) => ({ userId: id, name: names(id), submittedAt: s.submittedAt, lines: s.code.split('\n').length }))
         .sort((a, b) => b.submittedAt - a.submittedAt),
@@ -724,6 +846,7 @@ function freshState() {
     deadline: '',
     practiceMode: true, // practice week: days run normally but don't count toward the cumulative leaderboard
     withoutPlayers: [], // each counted day is also re-run without all of these players (results only; see runWithout)
+    earlierDays: [], // counted days of earlier rounds kept on the leaderboard (P&L only; see newRound's keepLeaderboard)
     round: 0, // the setup/practice round; each "Start new round" adds one
     schedule: { enabled: false, time: '12:00', timeZone: 'America/New_York', startDate: null, lastRun: null },
   };
@@ -804,6 +927,20 @@ function replayCalls(agent, calls, step) {
     },
   };
 }
+
+/** Call onLine for each line of a text file, read a piece at a time (a day's prices can be tens of MB). */
+async function eachLine(file, onLine) {
+  let rest = '';
+  for await (const chunk of fs.createReadStream(file, { encoding: 'utf8', highWaterMark: 1 << 20 })) {
+    const lines = (rest + chunk).split('\n');
+    rest = lines.pop();
+    for (const line of lines) if (line) onLine(line);
+  }
+  if (rest) onLine(rest);
+}
+
+const PUBLIC_PRODUCT_FIELDS = ['symbol', 'limit', ...LISTING_TERMS];
+const PRICE_SPLITS = 3; // days kept split by product for the market data tab
 
 const pnlOnly = (results) => Object.fromEntries(Object.entries(results).map(([id, r]) => [id, { pnl: r.pnl }]));
 const CURVE_POINTS = 1000; // samples per day for the leaderboard's lines (every 10 ticks of 10,000)

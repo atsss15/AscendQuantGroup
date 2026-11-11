@@ -4,15 +4,22 @@
  * Everything here is a PLACEHOLDER to be replaced with the real design. The simulator only relies on
  * the shape:
  *
- *   products: [{ symbol, limit }]               limit = max absolute position
+ *   products: [{ symbol, limit, underlying?, kind?, strike?, expiryDay? }]
+ *     limit = max absolute position; a contract's terms (optional) reach players in state.listings and on the page,
+ *     and no other product field is ever sent to players
  *   ticks, tickStep                              ticks per day; timestamps go 0, tickStep, 2·tickStep, …
- *   model.create({ rng, day, ticks, products, carry })  → { step(t) → { [symbol]: fairValue }, observations?(t), carry?() }
+ *   model.create({ rng, day, ticks, products, carry })  → { step(t) → { [symbol]: fairValue }, mark?(), observations?(t, { playerOpen }), carry?() }
+ *     mark(): end-of-day marks for every symbol (default: the last step's fair values; a missing symbol counts as 0)
+ *     observations(t, { playerOpen }): features published each tick; observations.csv takes its columns from tick 0's keys.
+ *       playerOpen: { [symbol]: the algorithms' open positions by size (long or short), as of the tick's start }
  *     carry: what the previous day's carry() returned (null on a round's first day), so days join up into one series
  *   bots: [{ name, quote?(ctx), take?(ctx) }]  (a take order may add match(restingOrder) → boolean; resting orders have .agent)
  *     quote(ctx) → orders resting in the book before algorithms act (market makers)
  *     take(ctx)  → orders sent after algorithms act; they trade against everything resting (takers)
  *     ctx: { t, timestamp, fair, rng, symbols, position, book? }   book = { [symbol]: { buy_orders, sell_orders, mid } }
+ *       (read-only; each symbol's depth is built when the bot first reads it)
  *     orders: [{ symbol, price, quantity }]       quantity > 0 buys, < 0 sells, integer prices
+ *   notes (optional): HTML for players, shown under "How it works"
  *
  * End-of-day P&L marks every position at the fair value from the model.
  * `rng()` is seeded per day, so a day can be replayed exactly for backtests.
@@ -32,7 +39,7 @@ export const competition = {
   products: [
     { symbol: 'STABLE', limit: 50 },
     { symbol: 'ASCEND', limit: 50 },
-    { symbol: `ASCEND_C${STRIKE}`, limit: 100 },
+    { symbol: `ASCEND_C${STRIKE}`, limit: 100, underlying: 'ASCEND', kind: 'call', strike: STRIKE, expiryDay: EXPIRY_DAY },
   ],
 
   model: {

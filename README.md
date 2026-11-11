@@ -22,7 +22,7 @@ Players sign in with their exchange account and write a Python `Trader` with the
 1. **Sign in** at `/algo` (see [Accounts](#accounts)).
 2. **Write your trader** in the editor. It autosaves and starts from a commented sample `trader.py` that shows every input: order book levels, position limits, published features, your fills with counterparties, the market's trades, and saving memory between ticks with `traderData`.
 3. **Study the data.** Under **Market data**:
-   - A price chart, and an order book you can scrub tick by tick.
+   - A price chart, and an order book you can scrub tick by tick, one product at a time. Contracts on an underlying are listed under it.
    - A **Weather & features** tab.
    - Per-day downloads of `prices.csv`, `trades.csv` and `observations.csv` (Prosperity's format), or **all days (zip)** for everything at once.
 4. **Backtest.** **Run backtest** replays a released day's prices and bots with only your algorithm trading, and shows:
@@ -35,6 +35,7 @@ Players sign in with their exchange account and write a Python `Trader` with the
 What your code gets each tick, and the rules:
 
 - **`state.order_depths`:** the bots' quotes, several levels deep.
+- **`state.listings`:** each product's listing. A contract on an underlying also has its terms, `underlying`, `kind`, `strike` and `expiryDay` (`None` for other products). **How it works** on `/algo` has the round's own notes on its products.
 - **`state.position`:** your positions. **Position limits:** if your orders for a product could take you past its limit, *all* of them are rejected for that tick.
 - **`state.own_trades`:** your fills since last tick. The other side is named (another player's name, or a bot id); you are `SUBMISSION`.
 - **`state.market_trades`:** everyone else's trades. Anonymous.
@@ -49,9 +50,14 @@ Sign in as Attis. The admin panel appears at the top of `/algo`.
 
 1. **Start new round…**
    - **Archives the old round:** days, results, the leaderboard and submissions move to `data/algo/archive/<time>/` on the server.
-   - **Generates data days:** it asks how many (default 15, i.e. about two weeks), numbered −14 to 0. These are bots-only days for players to study and backtest on, generated oldest first with the current design, each continuing the one before.
-   - **Day 1:** the first real day.
+   - **Generates data days:** these are bots-only days for players to study and backtest on, generated oldest first with the current design, each continuing the one before. The form asks:
+     - **Data days:** how many (default 15, about two weeks).
+     - **Continue prices:** when ticked, the first data day opens where the current round's last day closed, so the new round's market carries on from the old one. Untick it to start a fresh market. A round that never ran a real day is being redone, so continuing starts again from where that round began.
+     - **Keep the leaderboard:** when ticked, the days that counted so far stay on the leaderboard (and the unofficial one), and the new round's days add to everyone's total. Players see those days' P&L, but their files stay in the archive.
+     - **First real day:** the data days are numbered up to the day before it. It defaults to Day 1 (data days −14 to 0) for a fresh market, or to the day after the last data day when continuing (e.g. after a round whose last day was Day 10, 15 data days are Days 11 to 25 and the first real day is Day 26).
+   - **Chosen seeds (API only):** `POST /algo/api/admin/new-round` also takes `seeds`, one whole number (1 to 2³¹ − 1) per data day, oldest first, used instead of random seeds. With the same design and starting market, the same seeds make the same data days.
    - **Round numbering:** a round that never ran a day is redone under the same number.
+   - **The schedule** is kept, but it skips the day the round starts, so the first real day never runs the moment the data is ready. **Run Day N now** still works.
 2. **Schedule.** Tick **Run automatically every day at 12:00** (New York time) and pick a start date.
    - A gap of a couple of days after a new round gives players time to research.
    - After that, each day runs by itself and releases its results and data right away.
@@ -93,10 +99,15 @@ The real design lives in `algo/secret/competition.js`. That folder is git-ignore
 
 A design file defines:
 
-- **products:** each with a position limit.
-- **model:** fair values each tick, and optionally `observations(t)` for the features published to players, and `carry()` for the state the next day continues from (it gets it back as `carry`).
-- **bots:** `quote()` for makers and `take()` for takers. A bot's `name` is the id players see when they trade with it.
+- **products:** each with a position limit. A contract can also give its public terms, `underlying`, `kind`, `strike` and `expiryDay`. Players get those in `state.listings` and on the page. Any other field on a product is never sent to players.
+- **model:** `create({ rng, day, ticks, products, carry })` returns:
+  - `step(t)`: fair values each tick, for every product.
+  - `mark()` (optional): the end-of-day prices positions are marked at, for every product. A product missing from it is marked at 0.
+  - `observations(t, { playerOpen })` (optional): the features published to players. `observations.csv` takes its columns from the first tick's keys, so publish every key from tick 0. `playerOpen` gives the algorithms' open positions per product (by size, long or short) at the start of the tick, for a design that publishes them; it is 0 at the start of every day, and on bots-only days.
+  - `carry()` (optional): the state the next day continues from. The next day gets it back as `carry`.
+- **bots:** `quote()` for makers and `take()` for takers. A bot's `name` is the id players see when they trade with it. A taker's `book` is read-only, and each product's depth in it is built when the bot first reads it.
 - **settings:** ticks per day, the per-call time limit, and the sample `template`.
+- **notes** (optional): HTML shown to players under **How it works**, for the round's products and rules.
 
 Designs are validated privately before a round goes live. Naive analysis of the data players get has to find little out of sample, while each intended signal has to add significant P&L when traded on unseen days.
 
@@ -131,7 +142,7 @@ fly deploy --ha=false                                       # one machine (the v
 npm run migrate -- https://ascend-exchange.fly.dev         # copy a laptop's data/ to the server
 ```
 
-The design isn't in the repo or the Docker image (`.dockerignore` excludes `algo/secret/`). It reaches the server only as the encrypted `ALGO_DESIGN_B64` secret.
+The design isn't in the repo or the Docker image (`.dockerignore` excludes `algo/secret/`). It reaches the server only as the encrypted `ALGO_DESIGN_B64` secret. The secret may also be gzip-compressed before encoding, which keeps a large design well under size limits: `ALGO_DESIGN_B64="$(gzip -9c algo/secret/competition.js | base64 | tr -d '\n')"`. The server detects the compression.
 
 **Day to day:**
 

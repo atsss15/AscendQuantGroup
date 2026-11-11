@@ -33,6 +33,8 @@ export async function simulateDay({ config, day, seed, agents = [], record = tru
   const matchRng = makeRng(seed ^ 0xc2b2ae35);
   const symbols = config.products.map((p) => p.symbol);
   const limits = Object.fromEntries(config.products.map((p) => [p.symbol, p.limit]));
+  const known = new Set(symbols);
+  const listings = listingsOf(config);
   const world = config.model.create({ rng: makeRng(seed ^ 0x9e3779b9), day, ticks: config.ticks, products: config.products, options, carry });
 
   const accounts = new Map(); // owner -> { cash: {sym}, pos: {sym}, volume: {sym} }
@@ -62,8 +64,11 @@ export async function simulateDay({ config, day, seed, agents = [], record = tru
     const timestamp = t * (config.tickStep ?? 100);
     const fair = world.step(t);
     lastFair = fair;
-    // features published with this tick (weather and the like), shown to algorithms as plainValueObservations
-    const observed = world.observations?.(t) ?? {};
+    // features published with this tick (weather and the like), shown to algorithms as plainValueObservations.
+    // playerOpen: the algorithms' open positions per symbol (by size, long or short) as of the tick's start, for a
+    // design that publishes them (e.g. in open interest). Every day starts flat, so it starts at 0 each day.
+    const playerOpen = Object.fromEntries(symbols.map((s) => [s, agents.reduce((n, a) => n + Math.abs(account(a.name).pos[s]), 0)]));
+    const observed = world.observations?.(t, { playerOpen }) ?? {};
     if (record && Object.keys(observed).length) observationRows.push({ day, timestamp, ...observed });
     // world: the price model (bots may read its state); shared: scratch space bots can use to coordinate within a tick
     const ctx = { t, timestamp, fair, rng: botRng, symbols, products: config.products, world, shared: {} };
@@ -71,7 +76,7 @@ export async function simulateDay({ config, day, seed, agents = [], record = tru
     // 1. maker bots quote
     const resting = Object.fromEntries(symbols.map((s) => [s, []]));
     for (const bot of config.bots) {
-      for (const o of normalize(bot.quote?.({ ...ctx, position: account(bot.name).pos }) ?? [], bot.name, symbols)) resting[o.symbol].push(o);
+      for (const o of normalize(bot.quote?.({ ...ctx, position: account(bot.name).pos }) ?? [], bot.name, known)) resting[o.symbol].push(o);
     }
 
     // 2. snapshot + algorithms
@@ -83,7 +88,7 @@ export async function simulateDay({ config, day, seed, agents = [], record = tru
       return a.run({
         timestamp,
         traderData: st.traderData,
-        listings: Object.fromEntries(symbols.map((s) => [s, { symbol: s, product: s, denomination: config.currency ?? 'SEASHELLS' }])),
+        listings,
         order_depths: depths,
         own_trades: st.ownTrades,
         market_trades: st.marketTrades,
@@ -106,10 +111,14 @@ export async function simulateDay({ config, day, seed, agents = [], record = tru
       }
       // faster code queues earlier at the same price (bot quotes have priority 0)
       const priority = 1 + (Number.isFinite(reply.cpuUs) ? reply.cpuUs : 1e9);
-      const orders = normalize(reply.orders ?? [], a.name, symbols, (msg) => addError(st, timestamp, msg)).map((o) => ({ ...o, priority }));
+      const orders = new Map(); // symbol → this algorithm's orders for it, in the order sent
+      for (const o of normalize(reply.orders ?? [], a.name, known, (msg) => addError(st, timestamp, msg))) {
+        if (!orders.has(o.symbol)) orders.set(o.symbol, []);
+        orders.get(o.symbol).push({ ...o, priority });
+      }
       for (const s of symbols) {
-        const mine = orders.filter((o) => o.symbol === s);
-        if (!mine.length) continue;
+        const mine = orders.get(s);
+        if (!mine) continue;
         const pos = account(a.name).pos[s];
         const buys = mine.filter((o) => o.qty > 0).reduce((n, o) => n + o.qty, 0);
         const sells = mine.filter((o) => o.qty < 0).reduce((n, o) => n - o.qty, 0);
@@ -132,8 +141,9 @@ export async function simulateDay({ config, day, seed, agents = [], record = tru
     }
     for (const bot of config.bots) {
       if (!bot.take) continue;
-      const book = Object.fromEntries(symbols.map((s) => [s, depthOf(resting[s])]));
-      for (const o of normalize(bot.take({ ...ctx, book, position: account(bot.name).pos }) ?? [], bot.name, symbols)) {
+      // each symbol's depth is built when the bot first reads it, from what rests at that moment
+      const book = lazyBook(resting);
+      for (const o of normalize(bot.take({ ...ctx, book, position: account(bot.name).pos }) ?? [], bot.name, known)) {
         // a bot order may carry match(restingOrder) → boolean to choose which resting orders it can trade with
         const pool = typeof o.match === 'function' ? resting[o.symbol].filter(o.match) : resting[o.symbol];
         take(pool, [o], matchRng, trades);
@@ -199,14 +209,14 @@ export async function simulateDay({ config, day, seed, agents = [], record = tru
   return { day, seed, results, bots, fair: lastFair, mark, priceRows, tradeRows, observationRows, carry: world.carry?.() ?? null };
 }
 
-/** Validate orders from a bot or algorithm: integer price, non-zero integer quantity, known symbol. */
-function normalize(orders, owner, symbols, warn, bot = !warn) {
+/** Validate orders from a bot or algorithm: integer price, non-zero integer quantity, known symbol (`known`: a Set). */
+function normalize(orders, owner, known, warn, bot = !warn) {
   const out = [];
   for (const o of Array.isArray(orders) ? orders : []) {
     const symbol = o?.symbol;
     const price = Number(o?.price);
     const qty = Number(o?.quantity ?? o?.qty);
-    if (!symbols.includes(symbol)) {
+    if (!known.has(symbol)) {
       warn?.(`unknown product ${JSON.stringify(symbol)}`);
       continue;
     }
@@ -217,6 +227,50 @@ function normalize(orders, owner, symbols, warn, bot = !warn) {
     out.push({ owner, symbol, price, qty, remaining: Math.abs(qty), agent: !bot, priority: 0, ...(bot && typeof o.match === 'function' ? { match: o.match } : {}) });
   }
   return out;
+}
+
+/**
+ * What algorithms get as `state.listings`: Prosperity's {symbol, product, denomination}, plus a product's optional
+ * contract terms (underlying, kind, strike, expiryDay) when the design gives them. Built once per day.
+ */
+function listingsOf(config) {
+  const denomination = config.currency ?? 'SEASHELLS';
+  return Object.fromEntries(config.products.map((p) => {
+    const listing = { symbol: p.symbol, product: p.symbol, denomination };
+    for (const k of LISTING_TERMS) if (p[k] != null) listing[k] = p[k];
+    return [p.symbol, listing];
+  }));
+}
+export const LISTING_TERMS = ['underlying', 'kind', 'strike', 'expiryDay'];
+
+/**
+ * A taker bot's view of the book, { [symbol]: OrderDepth }, read-only. A symbol's depth is built the first time the
+ * bot reads it (nothing trades while a bot decides, so that is the book as it stood when the bot was asked), so a bot
+ * that looks at a few symbols doesn't pay for all of them. A view read after its bot's turn shows the book then.
+ */
+function lazyBook(resting) {
+  const listed = (key) => typeof key === 'string' && Object.hasOwn(resting, key);
+  const build = (built, key) => {
+    if (listed(key) && !Object.hasOwn(built, key)) built[key] = depthOf(resting[key]);
+  };
+  const readOnly = () => {
+    throw new TypeError('the book is read-only');
+  };
+  return new Proxy({}, {
+    get(built, key, receiver) {
+      build(built, key);
+      return Reflect.get(built, key, receiver);
+    },
+    getOwnPropertyDescriptor(built, key) {
+      build(built, key);
+      return Reflect.getOwnPropertyDescriptor(built, key);
+    },
+    has: (built, key) => listed(key) || Reflect.has(built, key),
+    ownKeys: () => Reflect.ownKeys(resting), // same keys, in the same order, as the book a plain object would be
+    set: readOnly,
+    defineProperty: readOnly,
+    deleteProperty: readOnly,
+  });
 }
 
 /** Aggregate resting orders into a Prosperity OrderDepth: buy_orders {price: vol}, sell_orders {price: -vol}. */

@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { queue, take, auction, makeRng } from '../algo/matching.js';
-import { simulateDay } from '../algo/sim.js';
+import { simulateDay, toCsv, PRICE_COLUMNS } from '../algo/sim.js';
 import { startAgent } from '../algo/runner.js';
-import { AlgoService, zoned, zonedToUtc } from '../algo/service.js';
+import { AlgoService, AlgoError, zoned, zonedToUtc } from '../algo/service.js';
 import { competition } from '../algo/competition.example.js'; // the public placeholder; the real design stays out of the repo
 import { createExchangeServer } from '../exchange/server.js';
 import { attachAlgo } from '../algo/server.js';
@@ -135,7 +136,7 @@ test('service: practice data, submissions, a competition day, leaderboard, backt
 
   const board = svc.leaderboard((id) => id.toUpperCase());
   assert.deepEqual(board.map((r) => r.name).sort(), ['U1', 'U2']);
-  const lines = svc.leaderboardLines((id) => id);
+  const lines = await svc.leaderboardLines((id) => id);
   assert.deepEqual(lines.days, [{ day: 1, points: Math.min(1000, small.ticks) }]);
   const u1 = lines.players.find((p) => p.userId === 'u1').pts;
   assert.equal(u1.length, lines.days[0].points);
@@ -304,6 +305,27 @@ class Trader:
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('a design can publish the algorithms\' open positions (playerOpen), from the tick after their fills', async () => {
+  const withOpen = {
+    ...small,
+    ticks: 8,
+    model: {
+      create(args) {
+        const w = small.model.create(args);
+        return { ...w, observations: (t, { playerOpen }) => ({ open: playerOpen.STABLE }) };
+      },
+    },
+  };
+  // one buys at tick 2, the other sells at tick 4, both against the bots' quotes
+  const trader = (name, at, quantity) => ({ name, run: async (s) => ({ orders: s.timestamp === at ? [{ symbol: 'STABLE', price: quantity > 0 ? 1000000 : 1, quantity }] : [] }) });
+  const res = await simulateDay({ config: withOpen, day: 1, seed: 7, agents: [trader('b', 200, 4), trader('s', 400, -3)] });
+  const open = res.observationRows.map((r) => r.open);
+  const bought = res.results.b.byProduct.STABLE.position;
+  const sold = res.results.s.byProduct.STABLE.position;
+  assert.ok(bought > 0 && sold < 0, 'both traded');
+  assert.deepEqual(open, [0, 0, 0, bought, bought, bought - sold, bought - sold, bought - sold], 'long and short both count, by size');
+});
+
 test('schedule: runs once a day at the set time (New York), from the start date', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'algo-sched-'));
   const svc = new AlgoService({ config: { ...small, ticks: 20 }, dir });
@@ -368,8 +390,12 @@ test('new round: archives everything, keeps editors, generates fresh data days',
   assert.deepEqual(redo.dataDays, [-2, -1, 0]);
   const file = await svc.dataZip();
   assert.match(path.basename(file), /^round_1_\w+\.zip$/);
-  const raw = fs.readFileSync(file).toString('latin1');
-  assert.ok(raw.includes('round_1/prices_round_1_day_-2.csv') && raw.includes('round_1/datamodel.py'), 'files are named by round and day');
+  const entries = unzip(file);
+  assert.deepEqual(Object.keys(entries), [-2, -1, 0].flatMap((d) => ['prices', 'trades'].map((k) => `round_1/${k}_round_1_day_${d}.csv`)).concat('round_1/datamodel.py'),
+    'files are named by round and day');
+  for (const d of [-2, -1, 0]) {
+    assert.equal(entries[`round_1/prices_round_1_day_${d}.csv`], fs.readFileSync(svc.dataFile(d, 'prices'), 'utf8'), 'and unzip to the same bytes');
+  }
   assert.equal(await svc.dataZip(), file, 'cached until the days change');
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -490,4 +516,330 @@ test('end to end over HTTP', { timeout: 30000 }, async (t) => {
   const sched = await call('POST', '/admin/schedule', admin, { enabled: true, time: '12:00', startDate: '2030-01-02' });
   assert.equal(new Date(sched.body.nextRunAt).toISOString(), '2030-01-02T17:00:00.000Z');
   assert.equal((await call('GET', '/me', jay.token)).body.schedule.nextRunAt, sched.body.nextRunAt, 'players see when the next day runs');
+
+  // one product's prices at a time
+  const part = await call('GET', '/days/1/prices.csv?product=ASCEND', jay.token);
+  assert.equal(part.status, 200);
+  const lines = part.body.trim().split('\n');
+  assert.match(lines[0], /^day;timestamp;product;bid_price_1/);
+  assert.ok(lines.length === small.ticks + 1 && lines.slice(1).every((l) => l.split(';')[2] === 'ASCEND'));
+  assert.ok((await call('GET', '/days/1/prices.csv', jay.token)).body.includes(';STABLE;'), 'without ?product: the whole file');
+  assert.equal((await call('GET', '/days/8/prices.csv?product=ASCEND', jay.token)).status, 404);
+
+  // new round: settings are checked before anything is archived
+  for (const bad of [{ dataDays: 0 }, { dataDays: 40 }, { firstDay: 'soon' }, { continueMarket: 1 }, { dataDays: 2, seeds: [5] }, { dataDays: 2, seeds: [5, '6'] }, { dataDays: 1, seeds: 5 }]) {
+    assert.equal((await call('POST', '/admin/new-round', admin, bad)).status, 400, JSON.stringify(bad));
+  }
+  assert.equal((await call('POST', '/admin/new-round', jay.token, { dataDays: 2 })).status, 403);
+  const started = await call('POST', '/admin/new-round', admin, { dataDays: 2, firstDay: 4, continueMarket: true });
+  assert.deepEqual(started.body, { started: true, dataDays: [2, 3], firstDay: 4, continuedFrom: { round: 0, day: 1 } });
+  for (let i = 0; i < 100 && (await call('GET', '/admin', admin)).body.preparing; i++) await new Promise((r) => setTimeout(r, 100));
+  const next = (await call('GET', '/admin', admin)).body;
+  assert.deepEqual(next.days.map((d) => d.day), [2, 3]);
+  assert.equal(next.nextDay, 4);
+  assert.deepEqual(next.continuedFrom, { round: 0, day: 1 });
+  assert.equal(next.lastError, null);
+});
+
+/** Read a .zip (stored or deflated entries) into { name: text }, checking every CRC: enough to check writeZip. */
+function unzip(file) {
+  const buf = fs.readFileSync(file);
+  const end = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  assert.ok(end >= 0, 'has an end of central directory');
+  const count = buf.readUInt16LE(end + 10);
+  let at = buf.readUInt32LE(end + 16);
+  const out = {};
+  for (let i = 0; i < count; i++) {
+    assert.equal(buf.readUInt32LE(at), 0x02014b50);
+    const [crc, packed, size] = [buf.readUInt32LE(at + 16), buf.readUInt32LE(at + 20), buf.readUInt32LE(at + 24)];
+    const nameLen = buf.readUInt16LE(at + 28);
+    const name = buf.subarray(at + 46, at + 46 + nameLen).toString();
+    const local = buf.readUInt32LE(at + 42);
+    assert.equal(buf.readUInt32LE(local), 0x04034b50);
+    assert.equal(buf.readUInt32LE(local + 14), crc, `${name}: the local header has the CRC`);
+    assert.equal(buf.readUInt32LE(local + 18), packed);
+    assert.equal(buf.readUInt32LE(local + 22), size);
+    const dataAt = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
+    const data = zlib.inflateRawSync(buf.subarray(dataAt, dataAt + packed));
+    assert.equal(data.length, size);
+    assert.equal(zlib.crc32(data), crc, `${name}: CRC matches`);
+    out[name] = data.toString();
+    at += 46 + nameLen + buf.readUInt16LE(at + 30) + buf.readUInt16LE(at + 32);
+  }
+  return out;
+}
+
+test('new round: continue the market from the last day, number the days before the first real day, skip today on the schedule', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'algo-continue-'));
+  const svc = new AlgoService({ config: { ...small, ticks: 30 }, dir });
+  assert.throws(() => svc.planRound({ continueMarket: true }), /no closing market/, 'nothing to continue from yet');
+  for (const bad of [{ dataDays: 0 }, { dataDays: 31 }, { dataDays: 2.5 }, { firstDay: 1.5 }, { firstDay: '5' }, { continueMarket: 'yes' }]) {
+    assert.throws(() => svc.planRound(bad), AlgoError, JSON.stringify(bad));
+  }
+  await svc.newRound({ dataDays: 2 }); // round 1: Days -1, 0 from a fresh market
+  svc.submit('u1', competition.template);
+  await svc.runDay(); // Day 1
+  const closed = svc.worldState(1).out;
+
+  // the schedule is on and today's run time has passed: without the guard the scheduler would run at once
+  svc.setSchedule({ enabled: true, time: '00:00', startDate: '2020-01-01', weekdays: null });
+  const res = await svc.newRound({ dataDays: 3, firstDay: 6, continueMarket: true });
+  assert.deepEqual(res.dataDays, [3, 4, 5], 'data days run up to the day before the first real day');
+  assert.deepEqual(res.continuedFrom, { round: 1, day: 1 });
+  assert.equal(svc.state.round, 2);
+  assert.equal(svc.state.nextDay, 6);
+  assert.deepEqual(svc.worldState(3).in, closed, 'the first data day opens where the last round closed');
+  assert.deepEqual(svc.worldState(4).in, svc.worldState(3).out, 'and the rest continue one another');
+  const archived = fs.readdirSync(path.join(dir, 'archive')).sort().at(-1);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'archive', archived, 'days', '1', 'world.json'), 'utf8')).out, closed, 'read before it was archived');
+  const now = Date.now();
+  const today = zoned(now, 'America/New_York').date;
+  assert.equal(svc.state.schedule.lastRun, today);
+  assert.equal(svc.checkSchedule(now), null, 'no scheduled run on the day a round starts');
+  assert.ok(svc.nextRunAt(now) > now && zoned(svc.nextRunAt(now), 'America/New_York').date > today, 'the next one is a later day');
+  assert.equal(svc.state.schedule.enabled, true, 'the schedule stays on');
+
+  const d3 = svc.getDay(3);
+  svc.submit('u1', competition.template);
+  const bt = await svc.backtest('u1', competition.template, 3);
+  assert.equal(bt.day, 3, 'a continued data day backtests from its own start');
+
+  // a round that never ran a real day is redone, and continuing starts again from the same place
+  const redo = await svc.newRound({ dataDays: 2, firstDay: 6, continueMarket: true });
+  assert.deepEqual(redo.dataDays, [4, 5]);
+  assert.deepEqual(redo.continuedFrom, { round: 1, day: 1 });
+  assert.equal(svc.state.round, 2, 'same round number');
+  assert.deepEqual(svc.worldState(4).in, closed, 'not from the round being redone');
+  assert.notEqual(svc.state.days[0].ranAt, d3.ranAt);
+
+  const fresh = await svc.newRound({ dataDays: 1, firstDay: 1 });
+  assert.deepEqual(fresh.dataDays, [0]);
+  assert.equal(fresh.continuedFrom, null);
+  assert.equal(svc.worldState(0).in, null, 'not continuing: a fresh market');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('new round with chosen seeds: each data day runs on its seed, so the same days can be made again', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'algo-seeds-'));
+  const svc = new AlgoService({ config: { ...small, ticks: 30 }, dir });
+  for (const seeds of [[1], [1, 2, 3, 4], [1, 2.5, 3], [0, 1, 2], [1, 2, 2 ** 31], ['1', 2, 3], 7]) {
+    assert.throws(() => svc.planRound({ dataDays: 3, seeds }), AlgoError, JSON.stringify(seeds));
+  }
+  assert.equal(svc.planRound({ dataDays: 3 }).seeds, null, 'no seeds: random ones');
+  const seeds = [11, 2 ** 31 - 1, 12345];
+  await svc.newRound({ dataDays: 3, firstDay: 1, seeds });
+  assert.deepEqual(svc.state.days.map((d) => [d.day, d.seed]), [[-2, 11], [-1, 2 ** 31 - 1], [0, 12345]], 'oldest first');
+  const files = (day) => ['prices', 'trades'].map((k) => fs.readFileSync(path.join(svc.dayDir(day), `${k}.csv`), 'utf8')).join('');
+  const first = [-2, -1, 0].map(files);
+  // the same seeds from the same (fresh) start make the same days again
+  await svc.newRound({ dataDays: 3, firstDay: 1, seeds });
+  assert.deepEqual([-2, -1, 0].map(files), first);
+  // without seeds the days differ
+  await svc.newRound({ dataDays: 3, firstDay: 1 });
+  assert.notDeepEqual([-2, -1, 0].map(files), first);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('new round keeping the leaderboard: earlier counted days stay on it and the new days add to them', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'algo-keep-'));
+  const svc = new AlgoService({ config: { ...small, ticks: 30 }, dir });
+  const names = (id) => id;
+  assert.throws(() => svc.planRound({ keepLeaderboard: 'yes' }), /keepLeaderboard/);
+  await svc.newRound({ dataDays: 1 }); // round 1: Day 0
+  svc.submit('u1', competition.template);
+  svc.submit('u2', competition.template);
+  await svc.runDay(); // Day 1
+  await svc.runDay(); // Day 2
+  svc.state.withoutPlayers = ['u2'];
+  svc.getDay(1).without = { players: ['u2'], ranAt: 1, results: { u1: { pnl: 5 } } };
+  const board = svc.leaderboard(names);
+  const lines = await svc.leaderboardLines(names);
+  assert.equal(board.length, 2);
+
+  const res = await svc.newRound({ dataDays: 2, firstDay: 5, continueMarket: true, keepLeaderboard: true });
+  assert.deepEqual(res.keptDays, [1, 2]);
+  assert.deepEqual(svc.leaderboard(names), board, 'same totals and days');
+  assert.deepEqual(await svc.leaderboardLines(names), lines, 'the lines are read from the archive');
+  assert.deepEqual(svc.withoutBoards(names)[0].days, [1], 'the unofficial board keeps its days too');
+  assert.equal(svc.latestDay(names).day, 2, 'until the new round has a day');
+  const mine = svc.playerView('u1', names).days;
+  const u1Before = board.find((r) => r.userId === 'u1');
+  assert.deepEqual(mine.filter((d) => d.archived).map((d) => [d.day, d.mine?.pnl]), [[1, u1Before.byDay[1]], [2, u1Before.byDay[2]]], 'your days include the kept ones');
+  assert.ok(mine.filter((d) => !d.archived).every((d) => d.practice), 'this round: data days only');
+
+  // a redo of a round with no real day keeps the same earlier days once
+  await svc.newRound({ dataDays: 2, firstDay: 5, continueMarket: true, keepLeaderboard: true });
+  assert.deepEqual(svc.state.earlierDays.map((d) => d.day), [1, 2]);
+  assert.deepEqual(svc.leaderboard(names), board);
+
+  svc.submit('u1', competition.template);
+  await svc.runDay(); // Day 5
+  const u1 = svc.leaderboard(names).find((r) => r.userId === 'u1');
+  assert.deepEqual(Object.keys(u1.byDay).map(Number), [1, 2, 5]);
+  assert.equal(u1.total, Math.round((u1Before.total + svc.getDay(5).results.u1.pnl) * 100) / 100, 'the new day adds to the total');
+  assert.equal(svc.latestDay(names).day, 5);
+
+  await svc.newRound({ dataDays: 1, firstDay: 7, continueMarket: true });
+  assert.deepEqual(svc.leaderboard(names), [], 'without keepLeaderboard it starts over');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('the design secret can be plain or gzip-compressed base64', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const src = "export const competition = { name: 'from the secret', products: [] };\n";
+  const loader = new URL('../algo/competition.js', import.meta.url).href;
+  const run = (b64) => JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', `const m = await import(${JSON.stringify(loader)}); console.log(JSON.stringify([m.competition.name, m.competitionSource]))`], { env: { ...process.env, ALGO_DESIGN_B64: b64 }, encoding: 'utf8' }));
+  const plain = Buffer.from(src).toString('base64');
+  const gz = zlib.gzipSync(Buffer.from(src), { level: 9 }).toString('base64');
+  assert.deepEqual(run(plain), ['from the secret', 'ALGO_DESIGN_B64 secret']);
+  assert.deepEqual(run(gz), ['from the secret', 'ALGO_DESIGN_B64 secret']);
+  assert.deepEqual(run(gz.replace(/(.{76})/g, '$1\n')), ['from the secret', 'ALGO_DESIGN_B64 secret'], 'line-wrapped base64 works too');
+});
+
+test("players see the design's notes and only the public terms of each product", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'algo-notes-'));
+  const products = [
+    { symbol: 'STABLE', limit: 50, privateParam: 0.3 },
+    { symbol: 'ASCEND', limit: 50, seed: 7 },
+    { symbol: 'ASCEND_C10000', limit: 100, underlying: 'ASCEND', kind: 'call', strike: 10000, expiryDay: 7, model: { hidden: 1 } },
+  ];
+  const svc = new AlgoService({ config: { ...small, products, notes: '<p>Contract <b>terms</b></p>' }, dir });
+  const info = svc.playerView('u1', (id) => id);
+  assert.equal(info.notes, '<p>Contract <b>terms</b></p>');
+  assert.deepEqual(info.products, [
+    { symbol: 'STABLE', limit: 50 },
+    { symbol: 'ASCEND', limit: 50 },
+    { symbol: 'ASCEND_C10000', limit: 100, underlying: 'ASCEND', kind: 'call', strike: 10000, expiryDay: 7 },
+  ]);
+  assert.equal(new AlgoService({ config: small, dir }).publicInfo().notes, null, 'no notes: nothing shown');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('a taker bot reading the book lazily sees exactly what a full snapshot would have shown', async () => {
+  // reference: every taker bot gets the whole book built up front, as plain objects (the old way)
+  const eager = (config) => ({
+    ...config,
+    bots: config.bots.map((b) => (b.take ? { ...b, take: (ctx) => b.take({ ...ctx, book: Object.fromEntries(ctx.symbols.map((s) => [s, ctx.book[s]])) }) } : b)),
+  });
+  // a second taker that reads one product's book only after the first has traded, and trades only with players
+  const config = {
+    ...small,
+    ticks: 1500,
+    bots: [...small.bots, {
+      name: 'Picky',
+      take({ book, rng, t }) {
+        const d = book[t % 2 ? 'ASCEND' : 'STABLE'];
+        const ask = Math.min(...Object.keys(d.sell_orders).map(Number));
+        return rng() < 0.3 && Number.isFinite(ask) ? [{ symbol: t % 2 ? 'ASCEND' : 'STABLE', price: ask, quantity: 3, match: (o) => o.agent }] : [];
+      },
+    }],
+  };
+  // players that rest orders inside the spread, so the takers trade with them too (fixed CPU time: a fixed queue)
+  const player = (name, size) => ({
+    name,
+    run: async (state) => {
+      const orders = [];
+      for (const [symbol, d] of Object.entries(state.order_depths)) {
+        const bid = Math.max(...Object.keys(d.buy_orders).map(Number));
+        const ask = Math.min(...Object.keys(d.sell_orders).map(Number));
+        if (ask - bid > 2 && Math.abs(state.position[symbol] ?? 0) < 40) orders.push({ symbol, price: bid + 1, quantity: size }, { symbol, price: ask - 1, quantity: -size });
+      }
+      return { orders, cpuUs: 7 };
+    },
+  });
+  const day = (c) => simulateDay({ config: c, day: 3, seed: 4242, agents: [player('a', 2), player('b', 3)] });
+  const [lazy, full] = [await day(config), await day(eager(config))];
+  assert.ok(lazy.tradeRows.some((t) => t.buyer === 'Picky'), 'the second taker traded');
+  assert.equal(toCsv(lazy.priceRows, PRICE_COLUMNS), toCsv(full.priceRows, PRICE_COLUMNS));
+  assert.deepEqual(lazy.tradeRows, full.tradeRows);
+  assert.deepEqual(lazy.results, full.results);
+  assert.deepEqual(lazy.bots, full.bots);
+
+  // a later taker sees what earlier ones took this tick
+  const views = [];
+  const sweep = { name: 'Sweep', take: ({ book }) => {
+    const [ask, size] = Object.entries(book.STABLE.sell_orders).sort((x, y) => x[0] - y[0])[0];
+    views.push(Number(ask));
+    return [{ symbol: 'STABLE', price: Number(ask), quantity: -size }];
+  } };
+  const after = { name: 'After', take: ({ book }) => void views.push(Math.min(...Object.keys(book.STABLE.sell_orders).map(Number))) };
+  await simulateDay({ config: { ...small, ticks: 5, bots: [small.bots[0], sweep, after] }, day: 1, seed: 2 });
+  for (let i = 0; i < views.length; i += 2) assert.ok(views[i + 1] > views[i], 'the best ask was taken, so the next bot sees the level behind it');
+
+  // it behaves like a plain object: keys in product order, `in`, JSON; and it can't be changed
+  let seen;
+  await simulateDay({ config: { ...small, ticks: 2, bots: [...small.bots, { name: 'Look', take: ({ book }) => void (seen ??= book) }] }, day: 1, seed: 1 });
+  assert.deepEqual(Object.keys(seen), ['STABLE', 'ASCEND', 'ASCEND_C10000']);
+  assert.ok('ASCEND' in seen && !('NOPE' in seen) && seen.NOPE === undefined);
+  assert.deepEqual(Object.keys(JSON.parse(JSON.stringify(seen)).STABLE), ['buy_orders', 'sell_orders', 'mid']);
+  assert.throws(() => {
+    seen.STABLE = {};
+  }, /read-only/);
+});
+
+test('products with contract terms reach the algorithm in state.listings', async () => {
+  const products = [
+    { symbol: 'STABLE', limit: 50 },
+    { symbol: 'ASCEND', limit: 50 },
+    { symbol: 'ASCEND_C10000', limit: 100, underlying: 'ASCEND', kind: 'call', strike: 10000, expiryDay: 7, secret: 1 },
+  ];
+  const code = `
+class Trader:
+    def run(self, state):
+        for s in ("STABLE", "ASCEND_C10000"):
+            l = state.listings[s]
+            print(s, l.symbol, l.product, l.denomination, l.underlying, l.kind, l.strike, l.expiryDay, hasattr(l, "secret"))
+        return {}, 0, ""
+`;
+  const agent = await startAgent({ name: 'p', code, timeLimitMs: 1000 });
+  const res = await simulateDay({ config: { ...small, products, ticks: 2 }, day: 1, seed: 8, agents: [agent] });
+  agent.close();
+  assert.deepEqual(res.results.p.logs.slice(0, 2), [
+    '[0] STABLE STABLE STABLE SEASHELLS None None None None False',
+    '[0] ASCEND_C10000 ASCEND_C10000 ASCEND_C10000 SEASHELLS ASCEND call 10000 7 False',
+  ]);
+});
+
+test('market data one product at a time; leaderboard lines skip a product until it has a two-sided price', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'algo-oneside-'));
+  // a product only ever bid for: it never has a mid price
+  const config = {
+    ...small,
+    ticks: 200,
+    products: [...small.products, { symbol: 'BIDONLY', limit: 10 }],
+    model: {
+      create(args) {
+        const w = small.model.create(args);
+        return { ...w, step: (t) => ({ ...w.step(t), BIDONLY: 100 }) };
+      },
+    },
+    bots: [...small.bots, { name: 'Bidder', quote: () => [{ symbol: 'BIDONLY', price: 99, quantity: 5 }] }],
+  };
+  const svc = new AlgoService({ config, dir });
+  svc.setPracticeMode(false);
+  svc.submit('u1', `
+from datamodel import Order
+class Trader:
+    def run(self, state):
+        if state.position.get("BIDONLY", 0) > -10:
+            return {"BIDONLY": [Order("BIDONLY", 99, -1)]}, 0, ""
+        return {}, 0, ""
+`);
+  const day1 = await svc.runDay();
+  assert.equal(day1.results.u1.byProduct.BIDONLY.position, -10);
+  const pts = (await svc.leaderboardLines((id) => id)).players[0].pts;
+  assert.ok(pts.slice(0, -1).every((v) => v === 0), 'never priced two-sided: left out, not marked at 0 (which would show the sales as profit)');
+  assert.equal(pts.at(-1), day1.results.u1.pnl, 'the day still ends at the official P&L');
+  assert.equal(day1.results.u1.pnl, -10);
+
+  const full = fs.readFileSync(svc.dataFile(1, 'prices'), 'utf8').trim().split('\n');
+  for (const product of ['STABLE', 'BIDONLY']) {
+    const part = (await svc.productPrices(1, product)).trim().split('\n');
+    assert.equal(part[0], full[0], 'with the header');
+    assert.deepEqual(part.slice(1), full.slice(1).filter((l) => l.split(';')[2] === product), `${product}: exactly its rows, in order`);
+    assert.equal(part.length - 1, config.ticks);
+  }
+  assert.equal((await svc.productPrices(1, 'NOPE')).trim(), full[0], 'an unknown product: just the header');
+  await assert.rejects(svc.productPrices(9, 'STABLE'), /No data for day 9/);
+  fs.rmSync(dir, { recursive: true, force: true });
 });

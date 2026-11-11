@@ -11,10 +11,16 @@ ObservationValue = int
 
 
 class Listing:
-    def __init__(self, symbol: Symbol, product: Product, denomination: Product):
+    def __init__(self, symbol: Symbol, product: Product, denomination: Product, underlying: Optional[Product] = None,
+                 kind: Optional[str] = None, strike: Optional[float] = None, expiryDay: Optional[int] = None):
         self.symbol = symbol
         self.product = product
         self.denomination = denomination
+        # contract terms, when the round's product has them (None otherwise)
+        self.underlying = underlying
+        self.kind = kind
+        self.strike = strike
+        self.expiryDay = expiryDay
 
 
 class ConversionObservation:

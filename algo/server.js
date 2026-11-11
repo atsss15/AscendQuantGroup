@@ -45,9 +45,18 @@ export function attachAlgo(server, { config, dir = path.resolve('data', 'algo'),
   api.put('/draft', wrap((req) => service.saveDraft(req.user.id, req.body?.code)));
   api.post('/submit', wrap((req) => service.submit(req.user.id, req.body?.code)));
   api.post('/backtest', wrap((req) => service.backtest(req.user.id, req.body?.code, req.body?.day)));
-  api.get('/days/:day/:kind.csv', (req, res) => {
+  api.get('/days/:day/:kind.csv', async (req, res) => {
     const kind = req.params.kind;
     if (!['prices', 'trades', 'observations', 'own'].includes(kind)) return res.status(404).end();
+    // ?product=SYMBOL: only that product's rows of the day's prices (the market data tab loads one product at a time)
+    if (kind === 'prices' && typeof req.query.product === 'string') {
+      try {
+        return res.type('text/csv').send(await service.productPrices(req.params.day, req.query.product));
+      } catch (err) {
+        if (!(err instanceof AlgoError)) console.error('[algo prices]', err);
+        return res.status(404).json({ error: err instanceof AlgoError ? err.message : 'Could not read that day' });
+      }
+    }
     sendFile(res, () => service.dataFile(req.params.day, kind, req.user.id), `${kind === 'own' ? 'my_trades' : kind}_day_${req.params.day}.csv`);
   });
   api.get('/data.zip', async (req, res) => {
@@ -75,14 +84,19 @@ export function attachAlgo(server, { config, dir = path.resolve('data', 'algo'),
   }));
   admin.post('/new-round', wrap((req) => {
     // archives the current round and generates fresh data days in the background; the page polls for progress
+    // body: { dataDays (1–30, default 3), firstDay (the first real day, default 1), continueMarket (default false),
+    //         seeds (optional: one whole number per data day, oldest first, instead of random seeds),
+    //         keepLeaderboard (default false: the days that counted so far stay on the leaderboard) }
     if (service.running || service.preparing) throw new AlgoError('A simulation is running; try again when it finishes');
+    const { dataDays = 3, firstDay = 1, continueMarket = false, seeds = null, keepLeaderboard = false } = req.body ?? {};
+    const opts = { dataDays, firstDay, continueMarket, seeds, keepLeaderboard };
+    const { start } = service.planRound(opts); // bad settings, or nothing to continue from: a 400 before anything changes
     service.lastError = null;
-    const dataDays = Math.min(Math.max(Math.round(Number(req.body?.dataDays) || 3), 1), 30);
-    service.newRound({ dataDays, firstDay: Number.isInteger(req.body?.firstDay) ? req.body.firstDay : 1 }).catch((err) => {
+    service.newRound(opts).catch((err) => {
       service.lastError = err.message;
       if (!(err instanceof AlgoError)) console.error('[algo new round]', err);
     });
-    return { started: true };
+    return { started: true, dataDays: [firstDay - dataDays, firstDay - 1], firstDay, continuedFrom: start && { round: start.round, day: start.day }, ...(seeds ? { seeded: true } : {}), ...(keepLeaderboard ? { keepLeaderboard: true } : {}) };
   }));
   admin.post('/schedule', wrap((req) => service.setSchedule(req.body ?? {})));
   admin.post('/reset-editors', wrap(() => service.resetDrafts()));

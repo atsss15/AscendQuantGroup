@@ -102,7 +102,8 @@ def main():
         state = TradingState(
             traderData=msg.get("traderData", ""),
             timestamp=msg["timestamp"],
-            listings={s: Listing(l["symbol"], l["product"], l["denomination"]) for s, l in msg["listings"].items()},
+            listings={s: Listing(l["symbol"], l["product"], l["denomination"], l.get("underlying"), l.get("kind"), l.get("strike"), l.get("expiryDay"))
+                      for s, l in msg["listings"].items()},
             order_depths={s: depth(d) for s, d in msg["order_depths"].items()},
             own_trades={s: [Trade(**t) for t in ts] for s, ts in msg["own_trades"].items()},
             market_trades={s: [Trade(**t) for t in ts] for s, ts in msg["market_trades"].items()},
